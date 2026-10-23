@@ -1,0 +1,72 @@
+{#-
+  公开档案详情：只读正文 + 评论 + 点赞。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<nav class="crumbs">
+  <a href="/lobby">前厅</a>
+  <span class="crumbs__sep">/</span>
+  <span>档案</span>
+</nav>
+
+<article class="card thread">
+  <h1>{{ title }}</h1>
+  <p class="doc-meta">
+    <span class="badge badge--public">公开</span>
+    <span class="muted">{{ author_name }}</span>
+    <span class="muted">更新于 {{ updated_at }}</span>
+  </p>
+  <div class="thread-body">{{ body }}</div>
+
+  <form class="like" method="post" action="/lobby/kb/{{ id }}/like">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    {%- if logged_in %}
+    <button class="btn btn--ghost" type="submit">
+      {%- if liked %}取消点赞{% else %}点赞{% endif -%}
+    </button>
+    {%- else %}
+    <a class="btn btn--ghost" href="/login?next=%2Flobby%2Fkb%2F{{ id }}">登录后可点赞</a>
+    {%- endif %}
+    <span class="muted">{{ like_count }} 人赞过</span>
+  </form>
+</article>
+
+<section class="section">
+  <h2>评论</h2>
+  {%- if comments.items.is_empty() %}
+  <p class="muted">还没有评论。</p>
+  {%- else %}
+  <ul class="post-list">
+    {%- for comment in comments.items %}
+    <li class="card post">
+      <p class="post-meta">
+        <strong>{{ comment.author_name }}</strong>
+        <span class="muted">{{ comment.created_at }}</span>
+      </p>
+      <div class="post-body">{{ comment.body }}</div>
+      {%- if comment.can_delete %}
+      <form method="post" action="/lobby/comments/{{ comment.id }}/delete">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn btn--danger btn--small" type="submit">删除</button>
+      </form>
+      {%- endif %}
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- call pager::render(comments, "") %}{% endcall %}
+  {%- endif %}
+
+  {%- if logged_in %}
+  <form class="card form" method="post" action="/lobby/kb/{{ id }}/comments">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label for="body">写条评论</label>
+    <textarea id="body" name="body" rows="4" maxlength="2000" required></textarea>
+    <button class="btn" type="submit">发布评论</button>
+  </form>
+  {%- else %}
+  <p class="muted"><a href="/login?next=%2Flobby%2Fkb%2F{{ id }}">登录</a>后可以评论。</p>
+  {%- endif %}
+</section>
+{% endblock %}

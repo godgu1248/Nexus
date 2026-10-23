@@ -1,0 +1,69 @@
+{#-
+  论坛首页：分区列表。
+
+  排序按热度（未删议题 + 未删回复）由后端算好，模板不参与排序；
+  这里把两个数字显示出来，否则用户看到的先后顺序等于黑箱（DESIGN §31）。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>论坛</h1>
+  <p class="lead">把正事从群聊里搬出来。一个议题一条线索，定论之后归档。</p>
+  {%- if can_create_space %}
+  <p><a class="btn" href="/forum/new">新建分区</a></p>
+  {%- endif %}
+</section>
+
+<section class="grid">
+  {%- for space in spaces %}
+  <article class="card">
+    <h2><a href="/forum/{{ space.slug }}">{{ space.name }}</a></h2>
+    <p class="muted">
+      <span class="badge">{{ space.visibility }}</span>
+      {%- match space.group_name %}
+      {%- when Some with (name) %} · 小组「{{ name }}」
+      {%- when None %}
+      {%- endmatch %}
+      · <code>{{ space.slug }}</code>
+      · {{ space.thread_count }} 议题 / {{ space.post_count }} 回复
+    </p>
+    <p>{{ space.description }}</p>
+    <p><a class="btn btn--ghost" href="/forum/{{ space.slug }}">进入</a></p>
+
+    {%- if can_create_space %}
+    {#- 改可见性直接写在这里：管理员一天要调好几次，跳去另一个页面再回来太绕。
+        注意 action 绑的是"分区"，不是议题——议题没有独立可见性。 -#}
+    <form class="inline-form" method="post" action="/forum/{{ space.slug }}/visibility">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <label for="vis-{{ space.slug }}">可见性</label>
+      <select id="vis-{{ space.slug }}" name="visibility">
+        <option value="public"{% if space.visibility_key == "public" %} selected{% endif %}>公开（含游客）</option>
+        <option value="internal"{% if space.visibility_key == "internal" %} selected{% endif %}>内部（仅成员）</option>
+        <option value="group"{% if space.visibility_key == "group" %} selected{% endif %}>小组（仅组员）</option>
+      </select>
+      <label for="grp-{{ space.slug }}">小组</label>
+      <select id="grp-{{ space.slug }}" name="group_id">
+        <option value="">（非小组可见性时留空）</option>
+        {%- for group in groups %}
+        <option value="{{ group.id }}"{% if space.group_id.is_some() && space.group_id.unwrap() == group.id %} selected{% endif %}>{{ group.name }}</option>
+        {%- endfor %}
+      </select>
+      <button class="btn btn--ghost" type="submit">保存</button>
+    </form>
+    {%- endif %}
+  </article>
+  {%- else %}
+  <article class="card">
+    <h2>还没有分区</h2>
+    <p class="muted">
+      {%- if can_create_space %}
+      先建一个分区，比如"剪辑"或"排期"。
+      {%- else %}
+      还没有人建分区。分区由管理员维护。
+      {%- endif %}
+    </p>
+  </article>
+  {%- endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,47 @@
+{#-
+  新建任务。
+
+  指派下拉里只有正常状态的成员（服务端也会再判一次）：界面上出现一个必然失败的选择，
+  比不出现更糟——用户会以为是自己填错了。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="section">
+  <p class="crumbs"><a href="/tasks">任务</a> / 新建</p>
+  <h1>新建任务</h1>
+
+  {%- match error %}
+  {%- when Some with (message) %}
+  <p class="flash flash--error" role="alert">{{ message }}</p>
+  {%- when None %}
+  {%- endmatch %}
+
+  <form class="stack" method="post" action="/tasks/new">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+    <label for="title">标题<span class="req">*</span></label>
+    <input id="title" name="title" type="text" maxlength="200" required value="{{ title }}">
+
+    <label for="body">说明</label>
+    <textarea id="body" name="body" rows="6" maxlength="20000">{{ body }}</textarea>
+
+    <label for="assignee">负责人</label>
+    <select id="assignee" name="assignee">
+      <option value="">暂不指派</option>
+      {%- for member in members %}
+      <option value="{{ member.id }}"{% if member.selected %} selected{% endif %}>{{ member.name }}</option>
+      {%- endfor %}
+    </select>
+
+    <label for="due_on">截止日期</label>
+    <input id="due_on" name="due_on" type="date" value="{{ due_on }}">
+    <p class="muted">留空表示没有截止日；任务是「哪天交」，不填时刻。</p>
+
+    <p class="form-actions">
+      <button class="btn" type="submit">创建</button>
+      <a class="btn btn--ghost" href="/tasks">取消</a>
+    </p>
+  </form>
+</section>
+{% endblock %}

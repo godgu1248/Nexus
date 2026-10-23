@@ -1,0 +1,83 @@
+{#-
+  任务详情。
+
+  三个操作表单各自独立：状态、指派、删除。合并成一个表单看起来省事，
+  但「改状态」和「改派」的权限对象不同（负责人 vs 创建者），合在一起就得在
+  服务端猜用户到底想干什么。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="section">
+  <p class="crumbs"><a href="/tasks">任务</a> / 详情</p>
+  <h1>{{ task.title }}</h1>
+  <p class="task-meta">
+    <span class="badge badge--{{ status_key }}">{{ status_label }}</span>
+    <span class="muted">负责人：{{ assignee_label }}</span>
+    {%- match due_on %}
+    {%- when Some with (date) %}<span class="task-due">截止 {{ date }}</span>
+    {%- when None %}<span class="muted">无截止日</span>
+    {%- endmatch %}
+  </p>
+  <p class="muted">
+    创建者 {{ task.created_by_name }} · 建于 {{ created_at }} · 更新于 {{ updated_at }}
+    {%- match source_thread_id %}
+    {%- when Some with (thread_id) %}
+    · 来自 <a href="/forum/t/{{ thread_id }}">议题 #{{ thread_id }}</a>
+    {%- when None %}
+    {%- endmatch %}
+  </p>
+
+  {%- match task.body %}
+  {%- when Some with (body) %}
+  {%- if !body.is_empty() %}
+  <div class="card task-body">{{ body }}</div>
+  {%- endif %}
+  {%- when None %}
+  {%- endmatch %}
+</section>
+
+{%- if can_status %}
+<section class="section">
+  <h2>改状态</h2>
+  <form class="inline-form" method="post" action="/tasks/{{ task.id }}/status">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label class="sr-only" for="status">状态</label>
+    <select id="status" name="status">
+      {%- for status in statuses %}
+      <option value="{{ status.key }}"{% if status.selected %} selected{% endif %}>{{ status.label }}</option>
+      {%- endfor %}
+    </select>
+    <button class="btn" type="submit">保存</button>
+  </form>
+</section>
+{%- endif %}
+
+{%- if can_assign %}
+<section class="section">
+  <h2>指派</h2>
+  <form class="inline-form" method="post" action="/tasks/{{ task.id }}/assign">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label class="sr-only" for="assignee">负责人</label>
+    <select id="assignee" name="assignee">
+      <option value=""{% if no_assignee_selected %} selected{% endif %}>未指派</option>
+      {%- for member in members %}
+      <option value="{{ member.id }}"{% if member.selected %} selected{% endif %}>{{ member.name }}</option>
+      {%- endfor %}
+    </select>
+    <button class="btn" type="submit">保存</button>
+  </form>
+</section>
+{%- endif %}
+
+{%- if can_delete %}
+<section class="section">
+  <h2>危险操作</h2>
+  <p class="muted">删除是软删除：行还在，只是从列表里消失，历史与审计仍可追溯。</p>
+  <form class="inline-form" method="post" action="/tasks/{{ task.id }}/delete">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <button class="btn btn--danger" type="submit">删除任务</button>
+  </form>
+</section>
+{%- endif %}
+{% endblock %}

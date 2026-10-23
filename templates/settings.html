@@ -1,0 +1,97 @@
+{#-
+  界面设置：背板 / 字体 / 强调色 三组，一次提交。
+
+  分组顺序按"面积"排：背板铺满整屏、字体影响所有文字、强调色只动按钮与链接。
+  改动越大越先看到，读者不用往下翻就知道整体会变成什么样子。
+
+  「保存」放在最下面：三组卡片是竖着排的一长串，按钮跟着内容走，
+  读者挑完最后一张卡，手已经在页面底部了。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero hero--slim">
+  <p class="hero__eyebrow">Appearance</p>
+  <h1 class="hero__title">界面设置</h1>
+  <p class="hero__lead">这三项只影响你自己看到的界面，不会改变别人打开这个站点时的样子。</p>
+</section>
+
+{%- if saved %}
+<div class="notice notice--ok" role="status">
+  <span class="notice__icon" aria-hidden="true">✓</span>
+  <p class="notice__text">外观已保存，下次登录还是这一套。</p>
+</div>
+{%- endif %}
+{%- match error %}
+{%- when Some with (message) %}
+<div class="notice notice--error" role="alert">
+  <span class="notice__icon" aria-hidden="true">!</span>
+  <p class="notice__text">{{ message }}</p>
+</div>
+{%- when None %}
+{%- endmatch %}
+
+<form class="settings-form" method="post" action="/settings">
+  <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+  <fieldset class="settings-group">
+    <legend class="settings-group__title">背板<span class="settings-group__en">Backdrop</span></legend>
+    <p class="settings-group__hint">铺在整页底下的纹理与光晕，越低对比越安静。</p>
+    <div class="theme-grid">
+      {%- for b in backdrops %}
+      <label class="theme-card{% if b.selected %} is-selected{% endif %}">
+        <input type="radio" name="background" value="{{ b.key }}" {% if b.selected %}checked{% endif %}>
+        <span class="bg-preview bg-preview--{{ b.key }}" aria-hidden="true"></span>
+        <span class="theme-card__name">{{ b.label }}</span>
+        <span class="theme-card__en" lang="en">{{ b.en }}</span>
+        {%- if b.selected %}<span class="theme-card__now">当前</span>{% endif %}
+        <span class="theme-card__hint">{{ b.hint }}</span>
+      </label>
+      {%- endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset class="settings-group">
+    <legend class="settings-group__title">字体<span class="settings-group__en">Typeface</span></legend>
+    <p class="settings-group__hint">只用系统里已有的字体，不下载任何外部字体文件。</p>
+    <div class="theme-grid">
+      {%- for f in fonts %}
+      <label class="theme-card{% if f.selected %} is-selected{% endif %}">
+        <input type="radio" name="font" value="{{ f.key }}" {% if f.selected %}checked{% endif %}>
+        <span class="font-preview font-preview--{{ f.key }}" aria-hidden="true">Aa 枢纽</span>
+        <span class="theme-card__name">{{ f.label }}</span>
+        <span class="theme-card__en" lang="en">{{ f.en }}</span>
+        {%- if f.selected %}<span class="theme-card__now">当前</span>{% endif %}
+        <span class="theme-card__hint">{{ f.hint }}</span>
+      </label>
+      {%- endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset class="settings-group">
+    <legend class="settings-group__title">强调色<span class="settings-group__en">Accent</span></legend>
+    <p class="settings-group__hint">按钮、链接、焦点框的颜色。背板与字体不受它影响。</p>
+    <div class="theme-grid">
+      {%- for t in themes %}
+      <label class="theme-card{% if t.selected %} is-selected{% endif %}">
+        <input type="radio" name="theme" value="{{ t.key }}" {% if t.selected %}checked{% endif %}>
+        <span class="swatch swatch--{{ t.key }}" aria-hidden="true">
+          <span class="swatch__bar"></span>
+          <span class="swatch__bar"></span>
+          <span class="swatch__bar"></span>
+        </span>
+        <span class="theme-card__name">{{ t.label }}</span>
+        <span class="theme-card__en" lang="en">{{ t.en }}</span>
+        {%- if t.selected %}<span class="theme-card__now">当前</span>{% endif %}
+        <span class="theme-card__hint">{{ t.hint }}</span>
+      </label>
+      {%- endfor %}
+    </div>
+  </fieldset>
+
+  <div class="settings-actions">
+    <button class="btn" type="submit">保存外观</button>
+    <a class="btn btn--ghost" href="/">返回内厅</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,46 @@
+{#-
+  搜索结果。
+
+  `query_prefix` 形如 `q=rust&`，已经做过 URL 编码——分页宏只负责拼 `page=`，
+  筛选条件由调用方负责，否则翻页就会丢掉关键词（这是列表页最常见的体验事故）。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <h1>查档案</h1>
+  <form class="search" method="get" action="/kb/search" role="search">
+    <label class="sr-only" for="q">搜索档案</label>
+    <input id="q" name="q" type="search" maxlength="64" value="{{ q }}" placeholder="搜标题或正文…">
+    <button class="btn" type="submit">搜索</button>
+  </form>
+  <p class="muted">
+    {%- if q.is_empty() %}
+    输入关键词开始搜索。
+    {%- else %}
+    「{{ q }}」共 {{ result.total }} 篇结果。
+    {%- endif %}
+  </p>
+</section>
+
+<section class="section">
+  {%- if result.items.is_empty() %}
+  <p class="muted">没有找到。换个说法，或者去<a href="/kb">目录</a>翻一翻。</p>
+  {%- else %}
+  <ul class="doc-list">
+    {%- for doc in result.items %}
+    <li class="card doc-card">
+      <a class="doc-card__title" href="/kb/{{ doc.id }}">{{ doc.title }}</a>
+      <p class="doc-meta">
+        <span class="badge badge--{{ doc.visibility_key }}">{{ doc.visibility }}</span>
+        {%- if !doc.is_published %}<span class="badge badge--draft">草稿</span>{% endif %}
+        <span class="muted">更新于 {{ doc.updated_at }}</span>
+      </p>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- call pager::render(result, query_prefix) %}{% endcall %}
+  {%- endif %}
+</section>
+{% endblock %}

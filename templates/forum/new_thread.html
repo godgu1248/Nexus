@@ -1,0 +1,30 @@
+{#-
+  发议题。标题必填，正文可空——有人就想开个标题让大家讨论，
+  强行要求正文只会逼出 "asdf" 这种占位内容。
+-#}
+{% extends "layout.html" %}
+{% import "shared/editor.html" as editor %}
+
+{% block content %}
+<section class="hero">
+  <p class="crumbs"><a href="/forum">论坛</a> / <a href="/forum/{{ space_slug }}">{{ space_name }}</a> / 发议题</p>
+  <h1>在 {{ space_name }} 发议题</h1>
+</section>
+
+{% match error %}
+{% when Some with (message) %}
+<p class="alert alert--error">{{ message }}</p>
+{% when None %}
+{% endmatch %}
+
+<section class="card">
+  <form method="post" action="/forum/{{ space_slug }}/new" class="form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label for="title">标题</label>
+    <input id="title" name="title" type="text" required maxlength="200" value="{{ title_value }}">
+    <label for="body">正文（可留空）</label>
+    {% call editor::render("body", "body", "body_html", body_value, 8, 20000) %}{% endcall %}
+    <button class="btn" type="submit">发布</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,45 @@
+{#-
+  新建分区（仅管理员）。
+
+  英文标识（slug）是 URL 的一部分，所以只允许小写字母、数字和短横线；
+  显示名可以是中文——两件事分开，改名字就不会打断已有的链接。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <p class="crumbs"><a href="/forum">论坛</a> / 新建分区</p>
+  <h1>新建分区</h1>
+  <p class="lead">分区决定议题的归属。先想清楚边界，再动手建——空分区比没有分区更乱。</p>
+</section>
+
+{% match error %}
+{% when Some with (message) %}
+<p class="alert alert--error">{{ message }}</p>
+{% when None %}
+{% endmatch %}
+
+<section class="card">
+  <form method="post" action="/forum/new" class="form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+    <label for="name">名称</label>
+    <input id="name" name="name" type="text" required maxlength="64" value="{{ name_value }}">
+
+    <label for="slug">英文标识</label>
+    <input id="slug" name="slug" type="text" required maxlength="64" pattern="[a-z0-9-]+" value="{{ slug_value }}">
+    <p class="muted">只允许小写字母、数字和短横线。它会出现在链接里，建好之后就别改了。</p>
+
+    <label for="description">说明</label>
+    <textarea id="description" name="description" rows="3" required maxlength="500">{{ description_value }}</textarea>
+
+    <label for="visibility">可见性</label>
+    <select id="visibility" name="visibility">
+      <option value="internal">内部（成员可见）</option>
+      <option value="public">公开（游客可见）</option>
+    </select>
+
+    <button class="btn" type="submit">创建</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,56 @@
+{#-
+  审计查看。
+
+  「看审计」本身就是一次被审计的动作（需求 L179）：这个页面每打开一次，
+  库里就多一条 admin.audit_view。所以筛选条件要一起记进 meta——
+  「谁天天翻全量审计」和「谁只查了自己那条登录记录」是完全不同的两件事。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <h1>审计</h1>
+  <nav class="tabs">
+    <a class="tab" href="/admin">总览</a>
+    <a class="tab" href="/admin/members">成员</a>
+    <a class="tab" href="/admin/joins">入队申请</a>
+    <a class="tab" href="/admin/submissions">投稿审核</a>
+    <span class="tab is-current" aria-current="page">审计</span>
+  </nav>
+  <form class="form form--inline" method="get" action="/admin/audit">
+    <label>操作者 ID <input type="text" name="actor" value="{{ actor_value }}" size="8"></label>
+    <label>动作前缀 <input type="text" name="action" value="{{ action_value }}" placeholder="auth." size="12"></label>
+    <label>对象类型 <input type="text" name="target_type" value="{{ target_type_value }}" placeholder="user" size="10"></label>
+    <label>对象 ID <input type="text" name="target_id" value="{{ target_id_value }}" size="8"></label>
+    <label>从 <input type="date" name="from" value="{{ from_value }}"></label>
+    <label>到 <input type="date" name="until" value="{{ until_value }}"></label>
+    <button class="btn btn--small" type="submit">筛选</button>
+  </form>
+</section>
+
+<section class="section">
+  {%- if rows.items.is_empty() %}
+  <p class="muted">没有符合条件的记录。</p>
+  {%- else %}
+  <table class="table">
+    <thead>
+      <tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>IP</th></tr>
+    </thead>
+    <tbody>
+      {%- for row in rows.items %}
+      <tr>
+        <td class="muted">{{ row.created_at }}</td>
+        <td>{{ row.actor }}</td>
+        <td><code>{{ row.action }}</code></td>
+        <td>{{ row.target }}</td>
+        <td class="muted">{{ row.ip }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+</section>
+
+{% call pager::render(rows, page_query) %}{% endcall %}
+{% endblock %}

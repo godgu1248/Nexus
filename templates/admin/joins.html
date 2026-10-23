@@ -1,0 +1,52 @@
+{#-
+  入队申请队列。
+
+  通过 = 申请置 approved + 用户升 member，两件事在同一事务里；
+  拒绝要留理由，因为申请人会在 /join 看到"已有待审申请"以外的东西时想知道为什么。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <h1>入队申请</h1>
+  <nav class="tabs">
+    <a class="tab" href="/admin">总览</a>
+    <a class="tab" href="/admin/members">成员</a>
+    <span class="tab is-current" aria-current="page">入队申请</span>
+    <a class="tab" href="/admin/submissions">投稿审核</a>
+    <a class="tab" href="/admin/audit">审计</a>
+  </nav>
+</section>
+
+<section class="section">
+  {%- if joins.items.is_empty() %}
+  <p class="muted">没有待处理的申请。</p>
+  {%- else %}
+  <ul class="card-list">
+    {%- for join in joins.items %}
+    <li class="card">
+      <h2 class="card__title">{{ join.display_name }} <span class="muted">@{{ join.username }}</span></h2>
+      <p class="muted">{{ join.email }} · 申请于 {{ join.created_at }}</p>
+      {%- if !join.message.is_empty() %}
+      <p class="card__body">{{ join.message }}</p>
+      {%- endif %}
+      <div class="card__actions">
+        <form method="post" action="/admin/joins/{{ join.id }}/approve">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn btn--small" type="submit">通过并升为 member</button>
+        </form>
+        <form class="form form--tight" method="post" action="/admin/joins/{{ join.id }}/reject">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="text" name="note" maxlength="500" placeholder="拒绝理由（可选）">
+          <button class="btn btn--small btn--ghost" type="submit">拒绝</button>
+        </form>
+      </div>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+
+{% call pager::render(joins, page_query) %}{% endcall %}
+{% endblock %}

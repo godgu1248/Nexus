@@ -1,0 +1,67 @@
+{#-
+  全站唯一的外壳。所有页面模板都 `{% extends "layout.html" %}`，只需实现 content 块。
+
+  契约（M1 起每个页面结构体都必须带这七个字段）：
+    page_title       —— 页面标题，拼在 `<title>` 里
+    static_base      —— 静态资源前缀，由 Config::static_base_url 注入（默认 /static）
+    csrf_token       —— 会话级 CSRF token；每次渲染都保证非空（游客也签发）
+    nav_display_name —— 导航栏显示的昵称；空串表示游客
+    nav_is_admin     —— 是否显示"管理"入口（只控制显示，真正的判定在 auth::policy）
+    nav_is_guest     —— 是否来宾（role=user）。只控制标签与提示条，不做权限判断
+    look             —— 外观三元组（theme/backdrop/font），只用于 `<body class="theme-… bg-… font-…">`；
+                        已由 `shared::appearance::Appearance::normalize` 收敛过，这里不再判断合法性
+
+  csrf_token 为空时**不输出 meta 标签**，而不是输出一个空值的 meta：
+  空 meta 会让前端的 htmx 配置读到空 token 并把它带进请求头，服务端校验必然失败，
+  而且失败原因看起来像"CSRF 校验太严"，实际是"根本没拿到 token"。宁可不输出。
+
+  导航由 `shared/nav.html` 的宏渲染，参数从**本结构体的字段**取。做成宏是因为导航
+  依赖当前用户——include 没有参数，只能靠全局上下文，而全局上下文最容易在某个页面被漏填。
+-#}
+{% import "shared/nav.html" as nav %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Askama 默认开启 HTML 转义，这里不要加 |safe。 #}
+  <title>{% block title %}{{ page_title }}{% endblock %}</title>
+  {%- if !csrf_token.is_empty() %}
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  {%- endif %}
+  {# 静态资源走"文件名不变 + 查询串版本号"：nginx 对 /static/* 发一年 immutable 缓存，
+     改样式必须换 URL，否则老访问者一年看不到新版。发版时只改这里的 v= 值。 #}
+  <link rel="stylesheet" href="{{ static_base }}/app.css?v=20261024">
+  {%- block head %}{% endblock %}
+</head>
+<body class="theme-{{ look.theme }} bg-{{ look.backdrop }} font-{{ look.font }}" data-theme="{{ look.theme }}" data-backdrop="{{ look.backdrop }}" data-font="{{ look.font }}">
+  {% call nav::render(nav_display_name, nav_is_admin, nav_is_guest, nav_active, csrf_token) %}{% endcall %}
+<div id="notice-banner" class="notice-banner" hx-get="/notice/banner" hx-trigger="load" hx-swap="innerHTML"></div>
+
+  {# 来宾提示条：只在 role=user 时出现。没有这条，外人点进论坛/档案/小组会以为
+     那就是全部内容——他看不到内部议题，却也不会知道自己被挡在外面。 #}
+  {%- if nav_is_guest %}
+  <div class="notice notice--guest" role="status">
+    <span class="notice__icon" aria-hidden="true">◷</span>
+    <p class="notice__text">
+      你现在是<strong>来宾</strong><span class="badge__en" lang="en">Guest</span>，
+      只能浏览公开内容。加入团队后即可进入内厅、论坛、档案与任务。
+    </p>
+    <a class="notice__link" href="/join">填写加入申请</a>
+  </div>
+  {%- endif %}
+
+  <main id="main" class="site-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <p>NEXUS · 内部协作站点</p>
+  </footer>
+
+  {# 静态文件由 nginx 直出，Rust 进程不挂 /static 路由。 #}
+  <script src="{{ static_base }}/htmx.min.js" defer></script>
+  <script src="{{ static_base }}/app.js?v=20261024" defer></script>
+  <script src="{{ static_base }}/editor.js?v=20261024" defer></script>
+</body>
+</html>

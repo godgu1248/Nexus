@@ -1,0 +1,35 @@
+{#-
+  申请加入内厅。
+
+  三种状态各有各的话：已在内厅的人不该看到表单，有申请在等的人不该再交一份，
+  只有真正还没申请过的人看到输入框。模板把三种状态分开画，页面上就不会出现
+  "点了提交却什么也没发生"的那种困惑。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>申请加入内厅</h1>
+  <p class="lead">注册之后你是"外部伙伴"：能看前厅、能评论点赞。内厅的论坛、档案、任务需要团队同意。</p>
+</section>
+
+<section class="section">
+  {%- if is_member %}
+  <p class="card">你已经是内厅成员了，<a href="/">回内厅</a>。</p>
+  {%- else if already_pending %}
+  <p class="card">你已经有一条待处理的申请了，等管理员看完再说。<a href="/lobby">先去前厅逛逛</a>。</p>
+  {%- else %}
+  {%- match error %}
+  {%- when Some with (message) %}<p class="flash flash--error">{{ message }}</p>
+  {%- when None %}
+  {%- endmatch %}
+  <form class="form" method="post" action="/join">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label>想做什么（可选，最多 500 字）
+      <textarea name="message" rows="6" maxlength="500" placeholder="擅长什么、想参与哪个方向、之前做过什么">{{ message_value }}</textarea>
+    </label>
+    <button class="btn" type="submit">提交申请</button>
+  </form>
+  {%- endif %}
+</section>
+{% endblock %}

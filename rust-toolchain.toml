@@ -1,0 +1,6 @@
+[toolchain]
+# 锁定编译器版本：Cargo 的版本解析取决于 MSRV（实测 generate-lockfile 会按 1.99.0
+# 把 matchit 从 0.8.6 降到 0.8.4）。换机器/换 CI 不锁这一行，依赖图就会漂。
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

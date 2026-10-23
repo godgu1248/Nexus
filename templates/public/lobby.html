@@ -1,0 +1,63 @@
+{#-
+  前厅首页：对外可见的议题与档案。
+
+  这一页是游客唯一能看到的完整列表，所以措辞要像"给人看的地方"，
+  而不是"内部系统的只读镜像"。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <h1>前厅</h1>
+  <p class="muted">这里是对外开放的部分：公开的议题与档案。内部的讨论与资料不在这里，也不会出现在这里。</p>
+  {%- if nav_display_name.is_empty() %}
+  <p class="muted">
+    <a href="/login">登录</a>后可以评论、点赞，或者给团队<a href="/register">注册</a>一个账号。
+  </p>
+  {%- else %}
+  <p class="muted">你好，{{ nav_display_name }}。可以评论、点赞，也可以<a href="/lobby/submit">投稿</a>。</p>
+  {%- endif %}
+</section>
+
+<section class="section">
+  <h2>公开议题</h2>
+  {%- if threads.items.is_empty() %}
+  <p class="muted">还没有对外公开的议题。</p>
+  {%- else %}
+  <ul class="doc-list">
+    {%- for thread in threads.items %}
+    <li class="card doc-card">
+      <a class="doc-card__title" href="/lobby/forum/{{ thread.id }}">{{ thread.title }}</a>
+      <p class="doc-meta">
+        <span class="badge badge--public">公开</span>
+        <span class="muted">{{ thread.space_name }}</span>
+        <span class="muted">{{ thread.reply_count }} 条回复</span>
+        <span class="muted">最后更新 {{ thread.last_post_at }}</span>
+      </p>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- call pager::render(threads, "") %}{% endcall %}
+  {%- endif %}
+</section>
+
+<section class="section">
+  <h2>公开档案</h2>
+  {%- if docs.is_empty() %}
+  <p class="muted">还没有对外公开的档案。</p>
+  {%- else %}
+  <ul class="doc-list">
+    {%- for doc in docs %}
+    <li class="card doc-card">
+      <a class="doc-card__title" href="/lobby/kb/{{ doc.id }}">{{ doc.title }}</a>
+      <p class="doc-meta">
+        <span class="badge badge--public">公开</span>
+        <span class="muted">更新于 {{ doc.updated_at }}</span>
+      </p>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+{% endblock %}

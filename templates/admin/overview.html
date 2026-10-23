@@ -1,0 +1,66 @@
+{#-
+  管理总览。三组数字是"今天要不要动手"的开关：
+  有申请待审、有投稿待审、可用管理员只剩一个——任何一项异常，这里必须一眼看见。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>管理</h1>
+  <p class="lead">审批、成员、投稿、审计，都在这一层。</p>
+  <nav class="tabs">
+    <span class="tab is-current" aria-current="page">总览</span>
+    <a class="tab" href="/admin/members">成员</a>
+    <a class="tab" href="/admin/joins">入队申请</a>
+    <a class="tab" href="/admin/submissions">投稿审核</a>
+    <a class="tab" href="/admin/audit">审计</a>
+  </nav>
+</section>
+
+<section class="section">
+  <ul class="stat-row">
+    <li class="card stat">
+      <span class="stat__value">{{ pending_joins }}</span>
+      <span class="stat__label">待审入队申请</span>
+      <a class="btn btn--small btn--ghost" href="/admin/joins">去处理</a>
+    </li>
+    <li class="card stat">
+      <span class="stat__value">{{ pending_submissions }}</span>
+      <span class="stat__label">待审投稿</span>
+      <a class="btn btn--small btn--ghost" href="/admin/submissions">去处理</a>
+    </li>
+    <li class="card stat">
+      <span class="stat__value">{{ active_admins }}</span>
+      <span class="stat__label">可用管理员</span>
+      {%- if active_admins <= 1 %}
+      <p class="badge badge--draft">只剩一个，别把他降级</p>
+      {%- endif %}
+    </li>
+  </ul>
+</section>
+
+<section class="section">
+  <h2>最近动作</h2>
+  {%- if recent.is_empty() %}
+  <p class="muted">还没有审计记录。</p>
+  {%- else %}
+  <table class="table">
+    <thead>
+      <tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>IP</th></tr>
+    </thead>
+    <tbody>
+      {%- for row in recent %}
+      <tr>
+        <td class="muted">{{ row.created_at }}</td>
+        <td>{{ row.actor }}</td>
+        <td><code>{{ row.action }}</code></td>
+        <td>{{ row.target }}</td>
+        <td class="muted">{{ row.ip }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  <p><a class="btn btn--ghost btn--small" href="/admin/audit">查看全部审计</a></p>
+  {%- endif %}
+</section>
+{% endblock %}

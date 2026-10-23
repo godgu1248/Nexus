@@ -1,0 +1,29 @@
+# 构建产物
+/target
+**/*.rs.bk
+
+# 环境与密钥：.env 永不进版本库（配置全环境变量，见 DESIGN.md §5）
+.env
+.env.*
+!.env.example
+
+# 运行时产物
+*.log
+/logs/
+/tmp/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 注意：Cargo.lock 必须提交，不要加进来。
+# 没有它，依赖解析会按部署机的编译器重新计算，版本就漂了（见 DESIGN.md §1.5）。
+
+# 本地上传目录（DESIGN §32）
+/uploads/
+
+# 个人运维脚本（不随仓库发布）
+/ops/

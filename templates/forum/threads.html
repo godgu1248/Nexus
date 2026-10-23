@@ -1,0 +1,48 @@
+{#-
+  分区内的议题列表。
+
+  `threads` 是展示用的卡片，`page` 只用来画分页控件——两套数据都来自同一个查询结果，
+  不是查两次。分页宏从 M0 起就是 `page` + `extra_query` 两个参数，这里 extra_query 传空串。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <p class="crumbs"><a href="/forum">论坛</a> / {{ space_name }}</p>
+  <h1>{{ space_name }}</h1>
+  <p class="lead">{{ space_description }}</p>
+  {%- if can_post %}
+  <p><a class="btn" href="/forum/{{ space_slug }}/new">发议题</a></p>
+  {%- else if !is_logged_in %}
+  <p class="muted"><a href="/login">登录</a>后可以发议题。</p>
+  {%- else %}
+  <p class="muted">你的角色可以浏览这个分区，但不能发议题。</p>
+  {%- endif %}
+</section>
+
+<section class="list">
+  {%- for thread in threads %}
+  <article class="card card--row">
+    <h2>
+      {%- if thread.is_pinned %}<span class="badge">置顶</span>{% endif %}
+      {%- if thread.is_resolved %}<span class="badge badge--ok">已定论</span>{% endif %}
+      {%- if thread.is_archived %}<span class="badge">已归档</span>{% endif %}
+      <a href="/forum/t/{{ thread.id }}">{{ thread.title }}</a>
+    </h2>
+    <p class="muted">
+      {{ thread.author_name }} · {{ thread.last_post_at }} · {{ thread.reply_count }} 条回复
+    </p>
+  </article>
+  {%- else %}
+  <article class="card">
+    <h2>这个分区还没有议题</h2>
+    <p class="muted">
+      {%- if can_post %}点上面的"发议题"开第一个。{% else %}等有人开第一个议题。{% endif %}
+    </p>
+  </article>
+  {%- endfor %}
+</section>
+
+{% call pager::render(page, "") %}{% endcall %}
+{% endblock %}

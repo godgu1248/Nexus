@@ -1,0 +1,50 @@
+{#-
+  投稿审核队列。
+
+  通过会建一篇**草稿**（不是直接发布）：采纳一篇外人投稿，等于替团队认领了一个设定，
+  还得有人补链接、补上下文。直接发出去会把半成品摆到前厅。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <h1>投稿审核</h1>
+  <nav class="tabs">
+    <a class="tab" href="/admin">总览</a>
+    <a class="tab" href="/admin/members">成员</a>
+    <a class="tab" href="/admin/joins">入队申请</a>
+    <span class="tab is-current" aria-current="page">投稿审核</span>
+    <a class="tab" href="/admin/audit">审计</a>
+  </nav>
+</section>
+
+<section class="section">
+  {%- if submissions.items.is_empty() %}
+  <p class="muted">没有待处理的投稿。</p>
+  {%- else %}
+  <ul class="card-list">
+    {%- for item in submissions.items %}
+    <li class="card">
+      <h2 class="card__title">{{ item.title }}</h2>
+      <p class="muted">由 {{ item.author_name }} 投稿于 {{ item.created_at }}</p>
+      <p class="card__body">{{ item.preview }}</p>
+      <div class="card__actions">
+        <form method="post" action="/admin/submissions/{{ item.id }}/approve">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn btn--small" type="submit">通过并建成档案草稿</button>
+        </form>
+        <form class="form form--tight" method="post" action="/admin/submissions/{{ item.id }}/reject">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="text" name="note" maxlength="500" placeholder="未采纳原因（可选）">
+          <button class="btn btn--small btn--ghost" type="submit">不采纳</button>
+        </form>
+      </div>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+
+{% call pager::render(submissions, page_query) %}{% endcall %}
+{% endblock %}

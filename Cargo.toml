@@ -1,0 +1,65 @@
+[package]
+name = "nexus"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+description = "Nexus（枢纽）——小型创作团队协作站点"
+
+# 版本策略：直接依赖一律用 `=` 精确锁定，配合提交的 Cargo.lock 与 rust-toolchain.toml。
+# 任何一次 `cargo update` 都不允许在无人察觉的情况下改动实际编译版本。
+
+[dependencies]
+axum = { version = "=0.8.9", features = ["macros", "multipart"] }
+askama = "=0.16.1"
+askama_web = { version = "=0.16.0", features = ["axum-0.8"] }
+sqlx = { version = "=0.9.0", default-features = false, features = [
+    "runtime-tokio",
+    "mysql",
+    # MySQL 8.0 起默认认证插件是 caching_sha2_password。明文连接下它要求 RSA 公钥交换，
+    # 而 sqlx 的 mysql-rsa 特性会拉进 rsa 0.10.0-rc.19 / pkcs1 0.8.0-rc.5 两个预发布版本，
+    # 与「禁 rc」冲突。所以改走 TLS：连接串必须带 ssl-mode=verify_ca 且配置 ssl-ca。
+    "tls-rustls-ring-webpki",
+    "macros",
+    "migrate",
+    "chrono",
+] }
+# 1.54.0 已被 crates.io 撤版（yanked），1.54.1 是接替它的补丁版本。
+tokio = { version = "=1.54.1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+    "sync",
+    "time",
+] }
+tower = "=0.5.3"
+tower-http = { version = "=0.7.1", features = ["trace", "request-id", "limit"] }
+tower-sessions = "=0.15.0"
+tower-sessions-memory-store = "=0.15.0"
+argon2 = "=0.6.0"
+thiserror = "=2.0.21"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+chrono = { version = "=0.4.45", features = ["serde"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
+rand = "=0.10.3"
+dotenvy = "=0.15.7"
+anyhow = "=1.0.104"
+# 图片按内容寻址存盘：文件名 = sha256(字节)。用它做去重与不可猜测的 URL，省掉自增 id 的
+# 枚举风险。digest/crypto-common 已随 argon2 进入依赖图，等于只多一个小 crate。
+sha2 = "=0.10.9"
+# 只为表达 session 过期时长：tower-sessions 的 Expiry::OnInactivity 收的是 time::Duration，
+# 而 time 没有被重新导出。版本与 lock 里已有的传递依赖一致，不引入新包。
+time = "=0.3.55"
+
+[dev-dependencies]
+http-body-util = "=0.1.5"
+tower = { version = "=0.5.3", features = ["util"] }
+
+[profile.release]
+# 2C2G 单机：体积与运行时内存优先，编译时间可接受。
+lto = "thin"
+codegen-units = 1
+strip = true

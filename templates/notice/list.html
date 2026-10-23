@@ -1,0 +1,70 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero hero--slim">
+  <p class="hero__eyebrow">Announcements</p>
+  <h1 class="hero__title">公告</h1>
+  <p class="hero__lead">团队广播。每条都要点头确认，红点才会消失。</p>
+  {%- if can_manage %}
+  <p><a class="btn" href="/notice/new">发布公告</a></p>
+  {%- endif %}
+</section>
+
+{%- if !unread.is_empty() %}
+<section class="section">
+  <h2>待确认（{{ unread.len() }}）</h2>
+  <div class="notice-stack">
+    {%- for n in unread %}
+    <article class="notice notice--announcement">
+      <div class="notice__text">
+        <strong>{{ n.title }}</strong>
+        <span class="muted"> · {{ n.author_name }} · {{ n.created_at }}</span>
+        {%- match n.body_html %}
+        {%- when Some with (html) %}
+        <div class="notice__body rich-text">{{ html|safe }}</div>
+        {%- when None %}
+        <div class="notice__body">{{ n.body }}</div>
+        {%- endmatch %}
+      </div>
+      <form class="inline" method="post" action="/notice/{{ n.id }}/ack">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn btn--ghost btn--small" type="submit">我知道了</button>
+      </form>
+    </article>
+    {%- endfor %}
+  </div>
+</section>
+{%- endif %}
+
+<section class="section">
+  <h2>全部公告</h2>
+  {%- if all.is_empty() %}
+  <p class="muted">还没有发过公告。</p>
+  {%- else %}
+  <div class="notice-stack">
+    {%- for n in all %}
+    <article class="notice">
+      <div class="notice__text">
+        <strong>{{ n.title }}</strong>
+        <span class="muted"> · {{ n.author_name }} · {{ n.created_at }}</span>
+        {%- match n.body_html %}
+        {%- when Some with (html) %}
+        <div class="notice__body rich-text">{{ html|safe }}</div>
+        {%- when None %}
+        <div class="notice__body">{{ n.body }}</div>
+        {%- endmatch %}
+      </div>
+      <div class="notice__actions">
+        {%- if can_manage %}
+        <form class="inline" method="post" action="/notice/{{ n.id }}/delete">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn btn--ghost btn--small" type="submit">撤下</button>
+        </form>
+        {%- endif %}
+      </div>
+    </article>
+    {%- endfor %}
+  </div>
+  {%- endif %}
+</section>
+{% endblock %}

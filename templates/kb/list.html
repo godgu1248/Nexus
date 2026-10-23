@@ -1,0 +1,59 @@
+{#-
+  档案首页：根文档 + 最近更新。
+
+  「查料」是需求里明写的能力（需求 §14），所以搜索框放在第一屏，不藏在二级页面里。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>档案</h1>
+  <p class="lead">团队的设定、流程与结论。找不到就直接搜。</p>
+  <form class="search" method="get" action="/kb/search" role="search">
+    <label class="sr-only" for="q">搜索档案</label>
+    <input id="q" name="q" type="search" maxlength="64" placeholder="搜标题或正文…">
+    <button class="btn" type="submit">搜索</button>
+  </form>
+  {%- if can_write %}
+  <p><a class="btn" href="/kb/new">新建文档</a></p>
+  {%- endif %}
+</section>
+
+<section class="section">
+  <h2>目录</h2>
+  {%- if roots.is_empty() %}
+  <p class="muted">还没有任何文档。{% if can_write %}从「新建文档」开始。{% endif %}</p>
+  {%- else %}
+  <ul class="doc-list">
+    {%- for doc in roots %}
+    <li class="card doc-card">
+      <a class="doc-card__title" href="/kb/{{ doc.id }}">{{ doc.title }}</a>
+      <p class="doc-meta">
+        <span class="badge badge--{{ doc.visibility_key }}">{{ doc.visibility }}</span>
+        {%- if doc.is_pinned %}<span class="badge badge--pinned">置顶</span>{% endif %}
+        {%- if !doc.is_published %}<span class="badge badge--draft">草稿</span>{% endif %}
+        <span class="muted">更新于 {{ doc.updated_at }}</span>
+        {%- if doc.child_count > 0 %}
+        <span class="muted">· {{ doc.child_count }} 篇子文档</span>
+        {%- endif %}
+      </p>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+
+{%- if !recent.is_empty() %}
+<section class="section">
+  <h2>最近更新</h2>
+  <ul class="doc-list">
+    {%- for doc in recent %}
+    <li class="doc-card doc-card--compact">
+      <a href="/kb/{{ doc.id }}">{{ doc.title }}</a>
+      <span class="muted">{{ doc.updated_at }}</span>
+    </li>
+    {%- endfor %}
+  </ul>
+</section>
+{%- endif %}
+{% endblock %}

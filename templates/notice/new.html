@@ -1,0 +1,35 @@
+{% extends "layout.html" %}
+{% import "shared/editor.html" as editor %}
+
+{% block content %}
+<section class="hero hero--slim">
+  <p class="hero__eyebrow">Announcements</p>
+  <h1 class="hero__title">发布公告</h1>
+  <p class="hero__lead">发出去之后，所有人的页面顶部都会挂一条，直到他点「我知道了」。</p>
+</section>
+
+{% match error %}
+{%- when Some with (message) %}
+<div class="notice notice--error">{{ message }}</div>
+{%- when None %}
+{% endmatch %}
+
+<section class="section">
+  <form class="form" method="post" action="/notice/new">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+    <label for="title">标题</label>
+    <input id="title" name="title" type="text" maxlength="{{ title_max }}" value="{{ title_value }}" required>
+
+    <label for="body">正文</label>
+    {% call editor::render("body", "body", "body_html", body_value, 6, body_max) %}{% endcall %}
+
+    <p class="muted">标题最多 {{ title_max }} 字，正文最多 {{ body_max }} 字，可以插图与排版。</p>
+
+    <p>
+      <button class="btn" type="submit">发布</button>
+      <a class="btn btn--ghost" href="/notice">取消</a>
+    </p>
+  </form>
+</section>
+{% endblock %}

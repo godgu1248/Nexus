@@ -1,0 +1,55 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="auth-card" aria-labelledby="register-title">
+  <h1 id="register-title" class="auth-card__title">注册账号</h1>
+
+  <p class="auth-card__hint">
+    注册后是普通成员，可以浏览公开区。进入内厅需要管理员在内厅里给你开通权限。
+  </p>
+
+  {%- if !errors.is_empty() %}
+  <ul class="flash flash--error" role="alert">
+    {%- for error in errors %}
+    <li>{{ error.field }}：{{ error.message }}</li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+
+  <form class="form" method="post" action="/register">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+    <label class="form__field">
+      <span class="form__label">用户名</span>
+      <input class="form__input" type="text" name="username" value="{{ username }}"
+             required minlength="3" maxlength="32" autocomplete="username"
+             autocapitalize="none" spellcheck="false">
+      <span class="form__hint">3–32 个字符，只能用字母、数字、下划线和连字符。</span>
+    </label>
+
+    <label class="form__field">
+      <span class="form__label">邮箱</span>
+      <input class="form__input" type="email" name="email" value="{{ email }}"
+             required maxlength="191" autocomplete="email" spellcheck="false">
+    </label>
+
+    <label class="form__field">
+      <span class="form__label">昵称<span class="form__optional">（可留空）</span></span>
+      <input class="form__input" type="text" name="display_name" value="{{ display_name }}"
+             maxlength="32" autocomplete="nickname">
+      <span class="form__hint">显示在右上角和你的发言旁边。留空就用用户名。</span>
+    </label>
+
+    <label class="form__field">
+      <span class="form__label">密码</span>
+      <input class="form__input" type="password" name="password"
+             required minlength="8" autocomplete="new-password">
+      <span class="form__hint">至少 8 位。可用字母、数字、下划线和常见符号（<code>~!@#$%^&amp;*()_-+=</code>，也认 <code>￥（）！？</code>）；不能有空格、汉字或表情。</span>
+    </label>
+
+    <button class="btn btn--primary btn--block" type="submit">注册</button>
+  </form>
+
+  <p class="auth-card__alt">已经有账号了？<a href="/login">直接登录</a></p>
+</section>
+{% endblock %}

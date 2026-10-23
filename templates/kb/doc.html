@@ -1,0 +1,99 @@
+{#-
+  文档详情：面包屑 + 正文 + 子文档 + 管理动作。
+
+  正文用 `white-space: pre-wrap` 保留换行（见 app.css 的 .doc-body）：
+  纯文本 + 换行是这一阶段的明确取舍，不做 Markdown 渲染（DESIGN §22.1）。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<nav class="crumbs" aria-label="位置">
+  <a href="/kb">档案</a>
+  {%- for crumb in crumbs %}
+  <span aria-hidden="true">/</span>
+  {%- if loop.last %}
+  <span aria-current="page">{{ crumb.title }}</span>
+  {%- else %}
+  <a href="/kb/{{ crumb.id }}">{{ crumb.title }}</a>
+  {%- endif %}
+  {%- endfor %}
+</nav>
+
+<article class="card doc">
+  <h1>{{ doc.title }}</h1>
+  <p class="doc-meta">
+    <span class="badge badge--{{ doc.visibility_key }}">{{ doc.visibility }}</span>
+    {%- if doc.is_pinned %}
+    <span class="badge badge--pinned">置顶</span>
+    {%- endif %}
+    {%- if !doc.is_published %}
+    <span class="badge badge--draft">草稿</span>
+    {%- else if !doc.published_at.is_empty() %}
+    <span class="muted">发布于 {{ doc.published_at }}</span>
+    {%- endif %}
+    <span class="muted">{{ doc.author_name }} · 更新于 {{ doc.updated_at }}</span>
+  </p>
+
+  {%- match doc.body_html %}
+  {%- when Some with (html) %}
+  <div class="doc-body rich-text">{{ html|safe }}</div>
+  {%- when None %}
+  <div class="doc-body">{{ doc.body }}</div>
+  {%- endmatch %}
+</article>
+
+{%- if can_manage %}
+<section class="section actions">
+  <a class="btn" href="/kb/{{ doc.id }}/edit">编辑</a>
+
+  <form class="inline" method="post" action="/kb/{{ doc.id }}/publish">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    {%- if doc.is_published %}
+    <input type="hidden" name="value" value="0">
+    <button class="btn btn--ghost" type="submit">撤回为草稿</button>
+    {%- else %}
+    <input type="hidden" name="value" value="1">
+    <button class="btn" type="submit">发布</button>
+    {%- endif %}
+  </form>
+
+  <form class="inline" method="post" action="/kb/{{ doc.id }}/delete">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <button class="btn btn--danger" type="submit">删除</button>
+  </form>
+
+  <a class="btn btn--ghost" href="/kb/new?parent={{ doc.id }}">在此新建子文档</a>
+</section>
+{%- endif %}
+
+<section class="section">
+  <h2>子文档</h2>
+  {%- if children.is_empty() %}
+  <p class="muted">这一篇下面还没有子文档。</p>
+  {%- else %}
+  <ul class="doc-list">
+    {%- for child in children %}
+    <li class="doc-card doc-card--compact">
+      <a href="/kb/{{ child.id }}">{{ child.title }}</a>
+      {%- if !child.is_published %}<span class="badge badge--draft">草稿</span>{% endif %}
+      <span class="muted">{{ child.updated_at }}</span>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+{%- if doc.can_pin %}
+<section class="section actions">
+  <form class="inline" method="post" action="/kb/{{ doc.id }}/pin">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="value" value="{% if doc.is_pinned %}off{% else %}on{% endif %}">
+    {%- if !doc.is_pinned %}
+    <label class="muted" for="pin-order">置顶顺序</label>
+    <input id="pin-order" class="input-inline" name="order" type="number" min="0" max="9999" value="0">
+    {%- endif %}
+    <button class="btn btn--ghost" type="submit">{% if doc.is_pinned %}取消置顶{% else %}置顶{% endif %}</button>
+  </form>
+</section>
+{%- endif %}
+
+{% endblock %}

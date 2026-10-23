@@ -1,0 +1,49 @@
+{#-
+  小组列表。
+
+  管理员看全部小组，普通成员只看自己所在的组——这个差别在 handler 里就分流了，
+  模板不做第二次判断（模板里出现权限判断，权限就又多了一处会漂移的地方）。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>小组</h1>
+  <p class="lead">小组决定"组内可见"的内容能给谁看。要把人加进来，才有资格看。</p>
+  {%- if is_admin %}
+  <p><a class="btn" href="/groups/new">新建小组</a></p>
+  {%- endif %}
+</section>
+
+<section class="grid">
+  {%- for group in groups %}
+  <article class="card">
+    <h2>
+      {%- if is_admin %}
+      <a href="/groups/{{ group.slug }}/members">{{ group.name }}</a>
+      {%- else %}
+      {{ group.name }}
+      {%- endif %}
+    </h2>
+    <p class="muted">{{ group.member_count }} 人 · <code>{{ group.slug }}</code></p>
+    {%- if !group.description.is_empty() %}
+    <p>{{ group.description }}</p>
+    {%- endif %}
+    {%- if is_admin %}
+    <p><a class="btn btn--ghost" href="/groups/{{ group.slug }}/members">管理成员</a></p>
+    {%- endif %}
+  </article>
+  {%- else %}
+  <article class="card">
+    <h2>还没有小组</h2>
+    <p class="muted">
+      {%- if is_admin %}
+      建一个小组，比如"剪辑组"，然后把成员加进去。
+      {%- else %}
+      你还没有被加入任何小组。需要看组内内容的话，找管理员把你加进去。
+      {%- endif %}
+    </p>
+  </article>
+  {%- endfor %}
+</section>
+{% endblock %}

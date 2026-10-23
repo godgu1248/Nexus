@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="auth-card" aria-labelledby="login-title">
+  <h1 id="login-title" class="auth-card__title">登录内厅</h1>
+
+  {%- if registered %}
+  <p class="flash flash--success" role="status">注册成功，请用新账号登录。</p>
+  {%- endif %}
+
+  {# 错误提示写在这里而不是走 422 错误页：错误页会把用户刚填的用户名一起丢掉。 #}
+  {%- match error %}
+  {%- when Some with (message) %}
+  <p class="flash flash--error" role="alert">{{ message }}</p>
+  {%- when None %}
+  {%- endmatch %}
+
+  <form class="form" method="post" action="/login" autocomplete="on">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    {# 只回显已经过 safe_next 归一化的站内路径，非法值在服务端已回落成 "/"。 #}
+    {%- if !next.is_empty() %}
+    <input type="hidden" name="next" value="{{ next }}">
+    {%- endif %}
+
+    <label class="form__field">
+      <span class="form__label">用户名或邮箱</span>
+      <input class="form__input" type="text" name="username" value="{{ username }}"
+             required autocomplete="username" autocapitalize="none" spellcheck="false">
+    </label>
+
+    <label class="form__field">
+      <span class="form__label">密码</span>
+      <input class="form__input" type="password" name="password"
+             required autocomplete="current-password">
+    </label>
+
+    <button class="btn btn--primary btn--block" type="submit">登录</button>
+  </form>
+
+  <p class="auth-card__alt">还没有账号？<a href="/register">注册一个</a></p>
+</section>
+{% endblock %}

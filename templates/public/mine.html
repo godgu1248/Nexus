@@ -1,0 +1,36 @@
+{#-
+  我的投稿。状态只有三种：待审核 / 已采纳 / 未采纳。
+  之所以把"未采纳"也显示出来，是因为沉默会让投稿人反复投同一份东西。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<nav class="crumbs">
+  <a href="/lobby">前厅</a>
+  <span class="crumbs__sep">/</span>
+  <span>我的投稿</span>
+</nav>
+
+<section class="section">
+  <h1>我的投稿</h1>
+  <p class="muted">投稿会先进待审队列。<a href="/lobby/submit">再投一份</a></p>
+
+  {%- if submissions.items.is_empty() %}
+  <p class="muted">还没有投过稿。</p>
+  {%- else %}
+  <ul class="doc-list">
+    {%- for item in submissions.items %}
+    <li class="card doc-card">
+      <span class="doc-card__title">{{ item.title }}</span>
+      <p class="doc-meta">
+        <span class="badge badge--{{ item.status_key }}">{{ item.status }}</span>
+        <span class="muted">投于 {{ item.created_at }}</span>
+      </p>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- call pager::render(submissions, "") %}{% endcall %}
+  {%- endif %}
+</section>
+{% endblock %}

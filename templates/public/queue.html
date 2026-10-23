@@ -1,0 +1,36 @@
+{#-
+  待审队列（管理员）。M6 只读：审核动作在 M7 的 admin 模块，
+  因为"通过"要跨模块建议题/档案，而 public 对 forum/kb 是只读依赖。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<nav class="crumbs">
+  <a href="/lobby">前厅</a>
+  <span class="crumbs__sep">/</span>
+  <span>待审队列</span>
+</nav>
+
+<section class="section">
+  <h1>待审队列</h1>
+  <p class="muted">这里只列出待审核的投稿。采纳与驳回在管理区处理（M7），当前页面只读。</p>
+
+  {%- if submissions.items.is_empty() %}
+  <p class="muted">队列是空的。</p>
+  {%- else %}
+  <ul class="doc-list">
+    {%- for item in submissions.items %}
+    <li class="card doc-card">
+      <span class="doc-card__title">{{ item.title }}</span>
+      <p class="doc-meta">
+        <span class="badge badge--pending">{{ item.status }}</span>
+        <span class="muted">投于 {{ item.created_at }}</span>
+      </p>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- call pager::render(submissions, "") %}{% endcall %}
+  {%- endif %}
+</section>
+{% endblock %}

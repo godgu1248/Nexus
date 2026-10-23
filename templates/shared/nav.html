@@ -1,0 +1,49 @@
+{#- 顶部导航。由 layout.html 调用，参数为 (显示名, 是否管理员, 是否来宾, 当前栏目, CSRF 令牌)。
+
+    做成宏而不是 include，是因为导航栏**依赖当前用户**：include 没有参数，
+    只能靠全局上下文猜，而全局上下文正是最容易在某个页面忘记填的东西。
+    空显示名 = 游客；来宾（role=user，自助注册但还没被批准加入）单独给一个标签，
+    免得他点进论坛/档案/小组后以为那是全部内容，却没意识到自己只看到公开部分。
+    权限判定本身在 Rust 侧，这里只决定"要不要显示标签与入口"。
+
+    `section` 是页面对应的栏目 key（home/forum/kb/groups/tasks/lobby/admin/settings），
+    由各 handler 的模板结构体显式传入——**不能靠路径猜**：`/forum/t/12` 与 `/forum`
+    是同一栏，而 `/kb/7` 和前厅的 `/lobby/kb/7` 完全不同栏，字符串前缀匹配必错。 -#}
+{% macro render(display_name, is_admin, is_guest, section, csrf_token) -%}
+<header class="site-header">
+  <a class="site-brand" href="/">
+    <span class="site-brand__mark" aria-hidden="true">◈</span>
+    <span class="site-brand__name">NEXUS</span>
+  </a>
+  <nav class="site-nav" aria-label="主导航">
+    <a class="nav-link{% if section == "home" %} is-current{% endif %}" href="/"{% if section == "home" %} aria-current="page"{% endif %}>内厅</a>
+    <a class="nav-link{% if section == "notice" %} is-current{% endif %}" href="/notice"{% if section == "notice" %} aria-current="page"{% endif %}>公告<span id="notice-dot" class="nav-dot-slot" hx-get="/notice/dot" hx-trigger="load" hx-swap="outerHTML"></span></a>
+    <a class="nav-link{% if section == "forum" %} is-current{% endif %}" href="/forum"{% if section == "forum" %} aria-current="page"{% endif %}>论坛</a>
+    <a class="nav-link{% if section == "kb" %} is-current{% endif %}" href="/kb"{% if section == "kb" %} aria-current="page"{% endif %}>档案</a>
+    <a class="nav-link{% if section == "tasks" %} is-current{% endif %}" href="/tasks"{% if section == "tasks" %} aria-current="page"{% endif %}>任务</a>
+    <a class="nav-link{% if section == "groups" %} is-current{% endif %}" href="/groups"{% if section == "groups" %} aria-current="page"{% endif %}>小组</a>
+    <a class="nav-link{% if section == "lobby" %} is-current{% endif %}" href="/lobby"{% if section == "lobby" %} aria-current="page"{% endif %}>前厅</a>
+  </nav>
+  <div class="site-account">
+    {%- if is_admin %}
+    <a class="nav-link{% if section == "admin" %} is-current{% endif %}" href="/admin"{% if section == "admin" %} aria-current="page"{% endif %}>管理</a>
+    {%- endif %}
+    {%- if display_name.is_empty() %}
+    <a class="btn btn--ghost" href="/login">登录</a>
+    <a class="btn btn--primary" href="/register">注册</a>
+    {%- else %}
+    {%- if is_guest %}
+    <span class="badge badge--guest" title="Guest" aria-label="来宾 Guest">
+      来宾<span class="badge__en" lang="en">Guest</span>
+    </span>
+    {%- endif %}
+    <span class="site-account__name">{{ display_name }}</span>
+    <a class="nav-link{% if section == "settings" %} is-current{% endif %}" href="/settings"{% if section == "settings" %} aria-current="page"{% endif %}>设置</a>
+    <form class="inline-form" method="post" action="/logout">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <button class="btn btn--ghost" type="submit">退出</button>
+    </form>
+    {%- endif %}
+  </div>
+</header>
+{%- endmacro %}

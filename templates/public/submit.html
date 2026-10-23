@@ -1,0 +1,42 @@
+{#-
+  投稿表单。投稿不会直接变成对外的内容：它先进待审队列，
+  由管理员在 M7 决定是否真的发布。这一点必须在页面上说清楚，
+  否则外人投完发现"什么都没发生"，会以为自己被无视了。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<nav class="crumbs">
+  <a href="/lobby">前厅</a>
+  <span class="crumbs__sep">/</span>
+  <span>投稿</span>
+</nav>
+
+<section class="section">
+  <h1>投稿</h1>
+  <p class="muted">
+    投稿会先进入待审队列，由团队确认后再决定是否公开。
+    审核通过前，它不会出现在前厅的任何地方。
+  </p>
+
+  {%- match error %}
+  {%- when Some with (message) %}
+  <p class="flash flash--error">{{ message }}</p>
+  {%- when None %}
+  {%- endmatch %}
+
+  <form class="card form" method="post" action="/lobby/submit">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label for="title">标题</label>
+    <input id="title" name="title" type="text" maxlength="200" value="{{ title_value }}" required>
+
+    <label for="body">正文</label>
+    <textarea id="body" name="body" rows="12" maxlength="40000" required>{{ body_value }}</textarea>
+
+    <div class="form-actions">
+      <button class="btn" type="submit">提交投稿</button>
+      <a class="btn btn--ghost" href="/lobby/mine">看看我投过的</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

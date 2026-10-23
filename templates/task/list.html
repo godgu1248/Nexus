@@ -1,0 +1,56 @@
+{#-
+  任务板：全部任务 / 我的任务。
+
+  「不漏事」靠的是列表里三样东西同时在：负责人、截止日期、状态。
+  只显示标题的列表看起来干净，但那正是"事情漏掉"的起点。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <h1>任务</h1>
+  <p class="lead">谁在做什么、做到哪一步、什么时候要交。</p>
+  <p class="tabs">
+    {%- if mine %}
+    <a class="tab" href="/tasks">全部任务</a>
+    <span class="tab is-current" aria-current="page">我的任务</span>
+    {%- else %}
+    <span class="tab is-current" aria-current="page">全部任务</span>
+    <a class="tab" href="/tasks?mine=1">我的任务</a>
+    {%- endif %}
+  </p>
+  {%- if can_write %}
+  <p><a class="btn" href="/tasks/new">新建任务</a></p>
+  {%- endif %}
+</section>
+
+<section class="section">
+  {%- if page.items.is_empty() %}
+  <p class="muted">
+    {%- if mine %}没有指派给你的任务。{% else %}还没有任何任务。{% endif -%}
+  </p>
+  {%- else %}
+  <ul class="task-list">
+    {%- for task in page.items %}
+    <li class="card task-card">
+      <a class="task-card__title" href="/tasks/{{ task.id }}">{{ task.title }}</a>
+      <p class="task-meta">
+        <span class="badge badge--{{ task.status_key }}">{{ task.status_label }}</span>
+        <span class="muted">
+          {%- match task.assignee %}{% when Some with (name) %}{{ name }}{% when None %}未指派{% endmatch -%}
+        </span>
+        {%- match task.due_on %}
+        {%- when Some with (date) %}<span class="task-due">截止 {{ date }}</span>
+        {%- when None %}<span class="muted">无截止日</span>
+        {%- endmatch %}
+        <span class="muted">· 更新于 {{ task.updated_at }}</span>
+      </p>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+
+{% call pager::render(page, page_query) %}{% endcall %}
+{% endblock %}

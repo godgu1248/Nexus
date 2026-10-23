@@ -1,0 +1,91 @@
+{#-
+  议题详情：正文按回复流展示，每条回复自带删除按钮（作者或管理员才渲染）。
+
+  所有写操作都是 POST 表单 + 隐藏 `_csrf`——GET 链接做删除是 CSRF 的经典破口，
+  而且浏览器预取会顺手把数据删掉。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+{% import "shared/editor.html" as editor %}
+
+{% block content %}
+<section class="hero">
+  <p class="crumbs"><a href="/forum">论坛</a> / <a href="/forum/{{ space_slug }}">{{ space_name }}</a></p>
+  <h1>
+    {%- if is_resolved %}<span class="badge badge--ok">已定论</span>{% endif %}
+    {%- if is_archived %}<span class="badge">已归档</span>{% endif %}
+    {{ title }}
+  </h1>
+  <p class="muted">{{ author_name }} 发起于 {{ created_at }}</p>
+</section>
+
+{% match error %}
+{% when Some with (message) %}
+<p class="alert alert--error">{{ message }}</p>
+{% when None %}
+{% endmatch %}
+
+{%- if can_resolve || can_archive %}
+<section class="toolbar">
+  {%- if can_resolve %}
+  <form method="post" action="/forum/t/{{ thread_id }}/resolve">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="value" value="{% if is_resolved %}off{% else %}on{% endif %}">
+    <button class="btn btn--ghost" type="submit">{% if is_resolved %}取消定论{% else %}标记定论{% endif %}</button>
+  </form>
+  {%- endif %}
+  {%- if can_archive %}
+  <form method="post" action="/forum/t/{{ thread_id }}/archive">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="value" value="{% if is_archived %}off{% else %}on{% endif %}">
+    <button class="btn btn--ghost" type="submit">{% if is_archived %}取消归档{% else %}归档{% endif %}</button>
+  </form>
+  {%- endif %}
+</section>
+{%- endif %}
+
+<section class="list">
+  {%- for post in posts %}
+  <article class="card post">
+    <header class="post__meta">
+      <strong>{{ post.author_name }}</strong>
+      <span class="muted">{{ post.created_at }}</span>
+    </header>
+    {%- match post.body_html %}
+    {%- when Some with (html) %}
+    <div class="post__body rich-text">{{ html|safe }}</div>
+    {%- when None %}
+    <div class="post__body">{{ post.body }}</div>
+    {%- endmatch %}
+    {%- if post.can_delete %}
+    <form method="post" action="/forum/p/{{ post.id }}/delete" class="post__actions">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <button class="btn btn--danger btn--small" type="submit">删除</button>
+    </form>
+    {%- endif %}
+  </article>
+  {%- else %}
+  <article class="card">
+    <p class="muted">这个议题还没有回复。</p>
+  </article>
+  {%- endfor %}
+</section>
+
+{% call pager::render(page, "") %}{% endcall %}
+
+{%- if can_reply %}
+<section class="card">
+  <h2>回复</h2>
+  <form method="post" action="/forum/t/{{ thread_id }}/reply" class="form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label for="body">内容</label>
+    {% call editor::render("body", "body", "body_html", "", 6, 20000) %}{% endcall %}
+    <button class="btn" type="submit">发表回复</button>
+  </form>
+</section>
+{%- else if is_archived %}
+<p class="muted">这个议题已归档，不能再回复。</p>
+{%- else if !is_logged_in %}
+<p class="muted"><a href="/login">登录</a>后可以回复。</p>
+{%- endif %}
+{% endblock %}

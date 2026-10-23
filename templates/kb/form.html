@@ -1,0 +1,57 @@
+{#-
+  新建 / 编辑共用表单。
+
+  `form_action` 由 handler 决定：新建是 `/kb/new`，编辑是 `/kb/{id}/edit`。
+  共用一份模板的理由：两边的字段、校验、错误回填完全一样，分成两份迟早分叉。
+
+  删除**不在这个页面**：文档详情页已有删除按钮，这里再放一个会出现
+  "两个删除入口、两套确认文案"的分叉，且 HTML 不允许表单嵌套。
+-#}
+{% extends "layout.html" %}
+{% import "shared/editor.html" as editor %}
+
+{% block content %}
+<section class="hero">
+  <h1>{{ heading }}</h1>
+  <p class="lead">标题与正文随时可改；子文档的可见范围不能比上级更宽。</p>
+</section>
+
+{%- if let Some(message) = error %}
+<div class="flash flash--error" role="alert">{{ message }}</div>
+{%- endif %}
+
+<form class="card form" method="post" action="{{ form_action }}">
+  <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+  {%- if let Some(parent) = parent_id %}
+  <input type="hidden" name="parent_id" value="{{ parent }}">
+  {%- endif %}
+
+  <label for="title">标题</label>
+  <input id="title" name="title" type="text" maxlength="200" required value="{{ title }}"
+         placeholder="例如：视频交付流程">
+
+  <label for="body">正文</label>
+  {% call editor::render("body", "body", "body_html", body, 18, 40000) %}{% endcall %}
+  <p class="muted">纯文本，换行会保留。最多 40000 字符。</p>
+
+  <label for="visibility">可见范围</label>
+  <select id="visibility" name="visibility">
+    <option value="internal"{% if visibility == "internal" %} selected{% endif %}>内部（内厅成员）</option>
+    <option value="public"{% if visibility == "public" %} selected{% endif %}>公开（前厅可看）</option>
+    <option value="group"{% if visibility == "group" %} selected{% endif %}>小组（仅组内）</option>
+  </select>
+
+  {%- if !groups.is_empty() %}
+  <label for="group_id">所属小组（可见范围选「小组」时必填）</label>
+  <select id="group_id" name="group_id">
+    <option value=""{% if group_id.is_empty() %} selected{% endif %}>— 不属于任何小组 —</option>
+    {%- for group in groups %}
+    <option value="{{ group.id }}"{% if group.selected %} selected{% endif %}>{{ group.name }}</option>
+    {%- endfor %}
+  </select>
+  {%- endif %}
+
+  <p><button class="btn" type="submit">保存</button>
+    <a class="btn btn--ghost" href="{{ cancel_href }}">取消</a></p>
+</form>
+{% endblock %}

@@ -1,0 +1,106 @@
+{#-
+  成员管理。
+
+  每一行有四个动作：改角色、改状态、软删除。它们分成三个独立表单——
+  合成一个表单看起来省地方，但服务端就得猜"这次提交的是哪件事"，
+  猜错的结果是把人删了却以为只是降了权限。
+-#}
+{% extends "layout.html" %}
+{% import "shared/pagination.html" as pager %}
+
+{% block content %}
+<section class="hero">
+  <h1>成员</h1>
+  <nav class="tabs">
+    <a class="tab" href="/admin">总览</a>
+    <span class="tab is-current" aria-current="page">成员</span>
+    <a class="tab" href="/admin/joins">入队申请</a>
+    <a class="tab" href="/admin/submissions">投稿审核</a>
+    <a class="tab" href="/admin/audit">审计</a>
+  </nav>
+  <form class="form form--inline" method="get" action="/admin/members">
+    <label>角色
+      <select name="role">
+        {%- for option in role_options %}
+        <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+        {%- endfor %}
+      </select>
+    </label>
+    <label>状态
+      <select name="status">
+        {%- for option in status_options %}
+        <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+        {%- endfor %}
+      </select>
+    </label>
+    <button class="btn btn--small" type="submit">筛选</button>
+  </form>
+</section>
+
+<section class="section">
+  {%- if members.items.is_empty() %}
+  <p class="muted">没有符合条件的成员。</p>
+  {%- else %}
+  <table class="table">
+    <thead>
+      <tr><th>成员</th><th>邮箱</th><th>角色</th><th>状态</th><th>加入时间</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {%- for m in members.items %}
+      <tr>
+        <td>
+          <strong>{{ m.display_name }}</strong>
+          <span class="muted">@{{ m.username }} · #{{ m.id }}</span>
+          {%- if m.is_self %}<span class="badge">你自己</span>{% endif %}
+        </td>
+        <td class="muted">{{ m.email }}</td>
+        <td>
+          {%- if m.is_self %}
+          <span class="badge">{{ m.role_key }}</span>
+          {%- else %}
+          <form class="form form--tight" method="post" action="/admin/members/{{ m.id }}/role">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <select name="role">
+              {%- for option in m.role_selected %}
+              <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+              {%- endfor %}
+            </select>
+            <button class="btn btn--small" type="submit">改</button>
+          </form>
+          {%- endif %}
+        </td>
+        <td>
+          <span class="badge badge--{{ m.status_key }}">{{ m.status_key }}</span>
+          {%- if !m.is_self %}
+          <form class="form form--tight" method="post" action="/admin/members/{{ m.id }}/status">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <select name="status">
+              {%- for option in m.status_selected %}
+              <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+              {%- endfor %}
+            </select>
+            <button class="btn btn--small" type="submit">改</button>
+          </form>
+          {%- endif %}
+        </td>
+        <td class="muted">{{ m.created_at }}</td>
+        <td>
+          {%- if m.is_self %}
+          <span class="muted">—</span>
+          {%- else %}
+          <form method="post" action="/admin/members/{{ m.id }}/delete"
+                onsubmit="return confirm('确定软删除这个账号？用户名会被释放，内容保留为「已注销」。');">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button class="btn btn--small btn--danger" type="submit">软删除</button>
+          </form>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+</section>
+
+{% call pager::render(members, page_query) %}{% endcall %}
+{% endblock %}

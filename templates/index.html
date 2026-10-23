@@ -1,0 +1,78 @@
+{#-
+  内厅首页。站名与主张用英文，正文用中文：品牌要一眼记住，内容要人人看懂。
+
+  这里不写"欢迎使用"——那类页面在验收时什么都证明不了。首页给三样东西：
+  一句定位、五个入口、当前环境状态（身份 / CSRF / 静态前缀 / 健康检查）。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <p class="hero__eyebrow">Internal collaboration</p>
+  <h1 class="hero__title">NEXUS<span class="hero__env">{{ env_label }}</span></h1>
+  <p class="lead">把正事从群聊里捞出来：议题有定论、资料有归处、任务有负责人、对外有前厅。</p>
+  <div class="hero__actions">
+    {%- if nav_display_name.is_empty() %}
+    <a class="btn btn--primary" href="/login">登录</a>
+    <a class="btn btn--ghost" href="/register">注册账号</a>
+    <a class="btn btn--ghost" href="/lobby">看看前厅</a>
+    {%- else %}
+    <a class="btn btn--primary" href="/forum">进入论坛</a>
+    <a class="btn btn--ghost" href="/tasks">我的任务</a>
+    <a class="btn btn--ghost" href="/kb">查档案</a>
+    {%- endif %}
+  </div>
+</section>
+
+<section class="feature-grid" aria-label="功能入口">
+  <a class="feature" href="/forum">
+    <span class="feature__icon" aria-hidden="true">◆</span>
+    <div class="feature__title">论坛</div>
+    <p class="feature__desc">按分区讨论，能定论、能归档 —— 结论不会埋在聊天记录里。</p>
+  </a>
+  <a class="feature" href="/kb">
+    <span class="feature__icon" aria-hidden="true">▤</span>
+    <div class="feature__title">档案</div>
+    <p class="feature__desc">树形知识库，设定与流程沉淀成文档，还能从议题一键转存。</p>
+  </a>
+  <a class="feature" href="/groups">
+    <span class="feature__icon" aria-hidden="true">◉</span>
+    <div class="feature__title">小组</div>
+    <p class="feature__desc">把内容收进小组可见 —— 没进组的人连标题都看不到。</p>
+  </a>
+  <a class="feature" href="/tasks">
+    <span class="feature__icon" aria-hidden="true">☑</span>
+    <div class="feature__title">任务</div>
+    <p class="feature__desc">谁负责、做到哪一步、什么时候交，一屏看完，不漏事。</p>
+  </a>
+  <a class="feature" href="/lobby">
+    <span class="feature__icon" aria-hidden="true">◇</span>
+    <div class="feature__title">前厅</div>
+    <p class="feature__desc">对外展示区：公开内容、评论与点赞，外面的人注册就能参与。</p>
+  </a>
+</section>
+
+<section class="section">
+  <h2 class="section-title">Status</h2>
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat__label">当前身份</div>
+      <div class="stat__value">
+        {%- if nav_display_name.is_empty() %}<span class="muted">游客</span>{% else %}{{ nav_display_name }}{% if nav_is_guest %}<span class="badge badge--guest" title="Guest">来宾<span class="badge__en" lang="en">Guest</span></span>{% endif %}{% if nav_is_admin %}<span class="badge badge--internal">管理员</span>{% endif %}{% endif %}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">CSRF 令牌</div>
+      <div class="stat__value">{% if csrf_token.is_empty() %}<span class="muted">未签发</span>{% else %}<span class="ok">已签发</span>{% endif %}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">静态资源前缀</div>
+      <div class="stat__value"><code>{{ static_base }}</code></div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">健康检查</div>
+      <div class="stat__value"><a href="/healthz">/healthz</a></div>
+    </div>
+  </div>
+</section>
+{% endblock %}

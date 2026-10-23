@@ -1,0 +1,38 @@
+{#-
+  分页控件。用法：
+
+    {% import "shared/pagination.html" as pager %}
+    {% call pager::render(self.result, self.query_prefix) %}
+
+  两个参数：
+    page        —— shared::Page<T>
+    extra_query —— 其它筛选条件的片段，形如 "q=rust&tag=note&"，没有则传 ""。
+                   **参数值必须已做过 URL 编码**（`q=a b` 要先变成 `q=a%20b`）；
+                   HTML 转义不用你管——Askama 会把 `&` 输出成 `&#38;`，
+                   浏览器解析 href 时再还原成 `&`，这是正确行为。
+
+  为什么要 extra_query：翻页时把筛选条件丢掉，是列表页最常见的体验事故——
+  用户筛了"未解决"，点第二页突然看到全部。把责任显式交给调用方，
+  比在这里偷偷拼 `?page=` 更不容易出这种错。
+
+  总页数为 1 时不渲染任何东西：一个只有"第 1 / 1 页"的控件是纯噪音。
+-#}
+{% macro render(page, extra_query) %}
+{%- if page.total_pages() > 1 %}
+<nav class="pager" aria-label="分页导航">
+  {%- if page.has_prev() %}
+  <a class="pager__btn" rel="prev" href="?{{ extra_query }}page={{ page.page - 1 }}">上一页</a>
+  {%- else %}
+  <span class="pager__btn is-disabled" aria-disabled="true">上一页</span>
+  {%- endif %}
+
+  <span class="pager__status">第 {{ page.page }} / {{ page.total_pages() }} 页</span>
+
+  {%- if page.has_next() %}
+  <a class="pager__btn" rel="next" href="?{{ extra_query }}page={{ page.page + 1 }}">下一页</a>
+  {%- else %}
+  <span class="pager__btn is-disabled" aria-disabled="true">下一页</span>
+  {%- endif %}
+</nav>
+{%- endif %}
+{% endmacro %}

@@ -1,0 +1,36 @@
+{#-
+  新建小组。
+
+  slug 前端只做提示（pattern），真正的校验在 service 里——前端校验是体验，不是安全边界。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>新建小组</h1>
+  <p class="lead">slug 会成为地址的一部分，建好之后不建议再改。</p>
+</section>
+
+{%- if let Some(message) = error %}
+<div class="flash flash--error" role="alert">{{ message }}</div>
+{%- endif %}
+
+<form class="card form" method="post" action="/groups/new">
+  <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+  <label for="name">名称</label>
+  <input id="name" name="name" type="text" maxlength="64" required value="{{ name }}"
+         placeholder="剪辑组">
+
+  <label for="slug">地址（slug）</label>
+  <input id="slug" name="slug" type="text" maxlength="64" required value="{{ slug }}"
+         pattern="[a-z0-9-]+" placeholder="edit-team">
+  <p class="muted">只能用小写字母、数字和短横线，不能以短横线开头或结尾。</p>
+
+  <label for="description">说明（可留空）</label>
+  <textarea id="description" name="description" rows="3" maxlength="500">{{ description }}</textarea>
+
+  <p><button class="btn" type="submit">创建小组</button>
+     <a class="btn btn--ghost" href="/groups">返回</a></p>
+</form>
+{% endblock %}

@@ -1,0 +1,61 @@
+{#-
+  小组成员管理：上面是现有成员（可移除），下面是可添加的人（只列 active 账号）。
+
+  每个成员/候选人各一个独立表单，而不是一个表单里塞多行再靠 JS 提交——
+  没有 JS 也要能用，是这套技术栈的前提（HTMX/Alpine 只是增强）。
+-#}
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>{{ group_name }}</h1>
+  <p class="lead">组内可见的内容，只对这些人生效。移出后他们的下一个请求就会失去访问权。</p>
+  <p><a class="btn btn--ghost" href="/groups">返回小组列表</a></p>
+</section>
+
+{%- if let Some(message) = error %}
+<div class="flash flash--error" role="alert">{{ message }}</div>
+{%- endif %}
+
+<section class="card">
+  <h2>现有成员（{{ members.len() }}）</h2>
+  {%- if members.is_empty() %}
+  <p class="muted">还没有成员。从下面把人加进来。</p>
+  {%- else %}
+  <ul class="member-list">
+    {%- for member in members %}
+    <li class="member-list__row">
+      <span>{{ member.display_name }} <code>{{ member.username }}</code></span>
+      <form method="post" action="/groups/{{ group_slug }}/members">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="remove">
+        <input type="hidden" name="user_id" value="{{ member.user_id }}">
+        <button class="btn btn--ghost" type="submit">移出</button>
+      </form>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+
+<section class="card">
+  <h2>可添加的成员</h2>
+  {%- if candidates.is_empty() %}
+  <p class="muted">没有可添加的人了（未激活或已注销的账号不在列表里）。</p>
+  {%- else %}
+  <ul class="member-list">
+    {%- for candidate in candidates %}
+    <li class="member-list__row">
+      <span>{{ candidate.display_name }} <code>{{ candidate.username }}</code></span>
+      <form method="post" action="/groups/{{ group_slug }}/members">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="add">
+        <input type="hidden" name="user_id" value="{{ candidate.user_id }}">
+        <button class="btn" type="submit">加入</button>
+      </form>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+{% endblock %}

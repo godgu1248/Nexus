@@ -1,0 +1,50 @@
+# Nexus 的 Caddy 站点配置（示例域名 nexus.example.com，替换成你自己的）
+#
+# 分工：
+#   - /static/*  由 Caddy 直接读盘，**不经过 Rust**（2C2G 上省一个数量级的内存与 CPU）
+#   - 其余请求   反代到 127.0.0.1:8080
+#
+# 关键顺序：`handle /static/*` 必须写在兜底的 `handle` 之前，否则静态请求会被反代吃掉。
+# 注意 `uri strip_prefix`：Rust 侧生成的链接是 /static/app.css，而磁盘目录是 /opt/nexus/static。
+
+nexus.example.com {
+	encode zstd gzip
+
+	handle /static/* {
+		uri strip_prefix /static
+		root * /opt/nexus/static
+
+		# 文件名不带内容哈希，所以这里只能按"内容不变"假设缓存；
+		# 一旦改了文件必须改名（见 static/README.md 的升级步骤）。
+		header Cache-Control "public, max-age=31536000, immutable"
+
+		# htmx.min.js 是第三方文件，单独给一个短一点的有效期便于升级
+		@htmx path /htmx.min.js
+		header @htmx Cache-Control "public, max-age=86400"
+
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080 {
+			# 传真实客户端 IP，配合应用侧 TRUST_PROXY=true 做登录限流
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# 安全响应头：应用本身不设置，交给边缘统一加
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/nexus.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+	}
+}
