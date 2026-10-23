@@ -15,7 +15,7 @@ use sqlx::{MySql, MySqlPool, Row, Transaction};
 use crate::error::AppError;
 
 /// 任务状态。三个值就是三个值——多一个状态就多一组转移规则，
-/// 十人团队还没到需要 `blocked` / `cancelled` 的地步（DESIGN §23.9 E1）。
+/// 中小型企业还没到需要 `blocked` / `cancelled` 的地步（DESIGN §23.9 E1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     Todo,

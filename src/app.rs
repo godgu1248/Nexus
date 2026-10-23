@@ -53,7 +53,7 @@ pub fn build_router(state: AppState) -> Router {
     let config = state.config.clone();
 
     // 内存 session：单进程、零外部依赖（需求禁 Redis）。代价是重启后所有人要重新登录，
-    // 已记入 DESIGN §12 技术债——接受它，因为 10 人团队的登录成本远低于多一个组件的运维成本。
+    // 已记入 DESIGN §12 技术债——接受它，因为中小型企业的登录成本远低于多一个组件的运维成本。
     let session_layer = SessionManagerLayer::new(MemoryStore::default())
         .with_name(config.session_cookie_name.clone())
         .with_secure(config.session_secure)

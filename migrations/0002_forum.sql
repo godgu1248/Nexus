@@ -9,7 +9,7 @@
 -- 1. forum_posts 不带 visibility：回复的可见性只能等于所属议题，单独存一列允许出现
 --    "议题 internal、某条回复 public"这种自相矛盾的状态。
 -- 2. forum_threads.visibility 建表就有但 M2 只写 'internal'：M3 改可见性时只改代码不改表。
--- 3. 没有 reply_count 列：计数器一定会漂移，10 人团队用 COUNT(*) + 索引足够。
+-- 3. 没有 reply_count 列：计数器一定会漂移，中小型企业用 COUNT(*) + 索引足够。
 
 CREATE TABLE IF NOT EXISTS forum_spaces (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

@@ -514,7 +514,7 @@ pub async fn soft_delete(tx: &mut Transaction<'_, sqlx::MySql>, id: u64) -> Resu
 /// 搜索：标题或正文包含关键词。返回（当页条目, 总数）。
 ///
 /// `LIKE '%q%'` 用不上索引，这是 DESIGN §22.10 D4 记下的已知债——
-/// 十人团队的档案量级下，先要正确、再谈索引。
+/// 中小型企业的档案量级下，先要正确、再谈索引。
 pub async fn search_docs(
     pool: &MySqlPool,
     viewer: Option<&CurrentUser>,
