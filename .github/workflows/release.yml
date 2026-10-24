@@ -1,0 +1,147 @@
+name: release
+
+# 打 tag 即发版：从 tag 构建 Linux(musl) 与 Windows 二进制，连同源码包一起发布到 Release。
+# 用仓库内置的 GITHUB_TOKEN，不需要任何个人访问令牌。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（已存在，例如 v0.1.2）'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - name: 安装 musl 工具链
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+      - name: 构建（静态链接）
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: 校验静态链接
+        run: |
+          file target/x86_64-unknown-linux-musl/release/nexus
+          if ldd target/x86_64-unknown-linux-musl/release/nexus 2>&1 | grep -q 'not a dynamic executable'; then
+            echo "static ok"
+          else
+            echo "::error::binary is dynamically linked"
+            exit 1
+          fi
+      - name: 打包
+        run: |
+          set -eu
+          V="${{ needs.version.outputs.version }}"
+          D="nexus-$V-linux-x86_64"
+          mkdir -p "$D" dist
+          cp target/x86_64-unknown-linux-musl/release/nexus "$D/nexus"
+          for p in static deploy migrations README.md DESIGN.md .env.example; do cp -r "$p" "$D/"; done
+          tar -czf "dist/$D.tar.gz" "$D"
+          (cd dist && zip -qr "$D.zip" "../$D")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - name: 构建
+        run: cargo build --release --locked
+      - name: 打包
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ needs.version.outputs.version }}'
+          $d = "nexus-$v-windows-x86_64"
+          New-Item -ItemType Directory -Path $d, dist -Force | Out-Null
+          Copy-Item target/release/nexus.exe "$d/nexus.exe"
+          foreach ($p in @('static','deploy','migrations','README.md','DESIGN.md','.env.example')) {
+            Copy-Item -Recurse $p "$d/"
+          }
+          # bsdtar 写正斜杠分隔符；Compress-Archive 会写反斜杠，Linux 上解出来是平铺文件
+          tar.exe -a -c -f "dist/$d.zip" $d
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  publish:
+    needs: [version, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: 源码包
+        run: |
+          set -eu
+          V="${{ needs.version.outputs.version }}"
+          git archive --format=zip --prefix="nexus-$V/" -o "assets/nexus-$V-source.zip" "HEAD"
+          ls -l assets
+      - name: 校验和
+        run: |
+          cd assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          # Release 标题/正文优先用仓库里的 release-notes（显式 UTF-8 读，避免中文乱码）
+          TITLE="Nexus 枢纽 $TAG"
+          if [ -f "release-notes/$TAG.title" ]; then TITLE="$(cat "release-notes/$TAG.title")"; fi
+          if [ -f "release-notes/$TAG.md" ]; then
+            gh release create "$TAG" --title "$TITLE" --notes-file "release-notes/$TAG.md" assets/* || \
+            gh release upload "$TAG" assets/* --clobber
+          else
+            gh release create "$TAG" --title "$TITLE" --generate-notes assets/* || \
+            gh release upload "$TAG" assets/* --clobber
+          fi
+      - name: 回读校验
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release view "$TAG" --json name,tagName,isDraft,assets
