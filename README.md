@@ -55,6 +55,17 @@ DESIGN.md        全部契约、裁决与实测记录（本项目的唯一权威
 
 两个二进制包都不含 `.env`：配置项见 `.env.example`，`DATABASE_URL` 是唯一必填项。包内 `deploy/` 放着 systemd unit、nginx 配置与上传目录脚本，与线上跑的是同一份。
 
+解压后三行就能跑起来（Windows 把 `./nexus` 换成 `.\nexus.exe`）：
+
+```bash
+unzip nexus-0.1.0-linux-x86_64.zip && cd nexus-0.1.0-linux-x86_64
+chmod +x nexus                       # zip 从 Windows 打包时不带可执行位
+cp .env.example .env && $EDITOR .env      # 至少填 DATABASE_URL
+./nexus                              # 默认监听 127.0.0.1:8080
+```
+
+`static/` 需要由反向代理直出（Rust 不挂 `/static`），本地试跑可以 `python3 -m http.server 8090 --directory static` 并把 `STATIC_BASE_URL` 指过去。
+
 ## 本地运行
 
 1. 准备 MySQL 8（本地 3306 可达），建库与账号：
