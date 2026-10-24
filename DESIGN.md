@@ -3178,3 +3178,35 @@ ALTER TABLE announcements ADD KEY idx_notice_audience (audience, is_active, dele
 - 来宾看不到团队公告，也**不会**在库里留下"未读"状态；等他被批准成成员的那天，
   这些历史公告会一次性冒出来（都算未读）。这是有意的：他没读过就是没读过，
   不该在他加入的瞬间被标成已读。
+
+### 34.7 v0.1.3 发布与产物复验
+
+v0.1.3（公告受众 + 来宾入口收敛）走的仍是「打 tag → Actions 出包」这条路，第一次就把
+四个资产全部产出了，说明 v0.1.2 那次「linux 没上传」确实是链路问题而不是流水线缺陷。
+
+流水线结果（回读 `GET /repos/godgu1248/Nexus/releases/tags/v0.1.3`）：
+
+| 资产 | 字节 | state |
+| --- | --- | --- |
+| `nexus-0.1.3-linux-x86_64.zip` | 3,717,802 | uploaded |
+| `nexus-0.1.3-linux-x86_64.tar.gz` | 3,703,970 | uploaded |
+| `nexus-0.1.3-windows-x86_64.zip` | 3,682,212 | uploaded |
+| `nexus-0.1.3-source.zip` | 525,463 | uploaded |
+| `SHA256SUMS.txt` | 379 | uploaded |
+
+标题取自 `release-notes/v0.1.3.title`（显式 UTF-8 读），回读为 `Nexus 枢纽 v0.1.3`——
+v0.1.0 那次把标题写成 `Nexus 鏋㈢航` 的 ANSI 事故没有复现。
+
+镜像 `/opt/nexus/downloads/` 同步换成 0.1.3：先删旧的 0.1.2 三个包（同一目录里堆三个版本
+再加一个 SUM 文件，等于邀请人下错包），再放新包与 `SHA256SUMS.txt`，`MIRROR.txt` 记下
+当前版本与「local-build 是另一套字节」。公网逐个下载重算哈希，4/4 一致。
+
+**归档验收要看权限位，而 `python3 -m zipfile` 不还原权限位。** 第一次在服务器上用
+`python zipfile.extractall()` 解包，`ls -l` 显示 `nexus` 是 `0644`，直接运行报
+`env: Permission denied`，看起来像"包做坏了、用户解压后跑不起来"。读 `external_attr`
+才看清归档里存的是 `0o755`，用 `unzip` 解出来是 `-rwxr-xr-x`，空环境运行输出
+「启动失败：配置不合法 —— 缺少必需的环境变量 DATABASE_URL」并退出 1；
+`readelf -l` 无 `PT_INTERP`（完全静态）。
+
+所以产物复验的固定做法是：**`unzip` 解包 + 看 `ls -l` + 空环境跑一次 + `readelf`/`ldd`**。
+用 Python 的 `zipfile` 解包后得到的权限位只能证明"解包工具没设权限"，不能证明"包坏了"。
