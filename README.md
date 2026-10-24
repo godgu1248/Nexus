@@ -56,6 +56,16 @@ DESIGN.md        全部契约、裁决与实测记录（本项目的唯一权威
 
 这些包不是手工上传的：给仓库打一个 `v*` 标签，`.github/workflows/release.yml` 会用仓库自带的 `GITHUB_TOKEN`，从该标签重新构建 Linux（musl 静态）与 Windows 二进制、导出源码包、附上校验和并创建 Release。所以**任何一个 Release 都能由对应标签复现**，维护者不需要持有个人令牌。
 
+到 github.com 的链路不稳定时（超时、TLS 握手失败，表现为「点了没反应」而不是「没有文件」），可以用同一份文件的镜像：
+
+```
+https://flowrun.cloud/downloads/nexus-<版本>-linux-x86_64.zip
+https://flowrun.cloud/downloads/nexus-<版本>-windows-x86_64.zip
+https://flowrun.cloud/downloads/SHA256SUMS.txt
+```
+
+镜像里的字节与 Release 资产完全一致（哈希对得上），目录说明见同路径的 `MIRROR.txt`。
+
 两个二进制包都不含 `.env`：配置项见 `.env.example`，`DATABASE_URL` 是唯一必填项。包内 `deploy/` 放着 systemd unit、nginx 配置与上传目录脚本，与线上跑的是同一份。
 
 解压后三行就能跑起来（Windows 把 `./nexus` 换成 `.\nexus.exe`）：

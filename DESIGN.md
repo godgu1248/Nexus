@@ -3027,3 +3027,35 @@ AND (d.visibility = 'public'
 1. **CI 每次全量编译**（约 5 分钟，两个平台并行），没有缓存 `~/.cargo` 与 `target/`；在当前的发布频率下，不值得为省 3 分钟引入缓存失效的风险。
 2. **Windows 包没有代码签名**，首次运行会有 SmartScreen 提示；这是未购证书的必然结果，不是缺陷。
 3. **Release 资产发布后不再替换**；要改只能发新版本。（`v0.1.2` 曾因修正 34.3 的校验步骤重新打过标签，但那两次都还没有发布任何资产。）
+
+### 34.6 发行包镜像（2026-10-24 补）
+
+发布完成后 owner 反馈「Linux 包没上传成功，Windows 的传上去了」。查证结论分两层：
+
+**GitHub 侧状态是好的。** 从 ECS 这一侧读 `api.github.com`（本机到 github 的 TLS 当时在反复失败）：
+
+```
+tag_name v0.1.2  draft false  prerelease false
+nexus-0.1.2-linux-x86_64.tar.gz   state=uploaded  size=3690389
+nexus-0.1.2-linux-x86_64.zip      state=uploaded  size=3705232
+nexus-0.1.2-source.zip            state=uploaded  size=511318
+nexus-0.1.2-windows-x86_64.zip    state=uploaded  size=3668656
+SHA256SUMS.txt                    state=uploaded  size=379
+```
+
+五个资产全在，两个 Linux 归档的字节数与我下载后算出的哈希都对得上清单。
+
+**下载侧是坏的。** 同一时刻，本机 `curl` 到 `github.com:443` 是 `schannel: failed to receive handshake`，ECS 到 `github.com:443` 是 `Connection timed out`。也就是说「Linux 包没上传成功」的真实体感来自下载失败：点 Linux 包超时、点 Windows 包恰好成功，看起来就像前者没上传。
+
+**处置：加一个自家镜像。** `/opt/nexus/downloads/` 存放与 Release **逐字节相同**的两个二进制包与 `SHA256SUMS.txt`，`nginx` 用 `location /downloads/` 直出（这条 location 也写进了仓库的 `deploy/nginx.conf`，保证仓库与线上一致）。公网验证：
+
+```
+https://flowrun.cloud/downloads/nexus-0.1.2-linux-x86_64.zip    200  3705232  sha256 6fd77d0f…
+https://flowrun.cloud/downloads/nexus-0.1.2-windows-x86_64.zip  200  3668656  sha256 60a394ef…
+```
+
+两个哈希与 Release 的 `SHA256SUMS.txt` 完全一致，所以镜像不是「另一份构建」，就是同一份东西。
+
+没镜像的两项与原因：`nexus-0.1.2-linux-x86_64.tar.gz` 与 `.zip` 内容重复（省一次 3.7 MB 上传）；`nexus-0.1.2-source.zip` 无法在本地复现字节（`git archive` 同尺寸 511318 B，但 zip 元数据随 git/zip 版本不同，哈希为 `3888ba36…` 而非 `abf8d35c…`），镜像一份哈希对不上的源码包只会制造困惑，所以改为在 `MIRROR.txt` 里给出从标签自行导出的命令。
+
+**留下的教训**：这次差点按「上传失败」去重传——如果只信用户体感而不去核 GitHub 的状态码，会做一次无意义的重复上传，还会把「资产已存在」误当成「上传成功但内容坏」。判断依据必须是服务端状态 + 下载后的哈希，两者缺一不可；而**下载失败时要区分「对方没给」与「路不通」**。
