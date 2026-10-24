@@ -2990,3 +2990,40 @@ AND (d.visibility = 'public'
 定级：**低危**（只影响链接指向，不构成 XSS——`javascript:` 与事件属性本来就被拒），
 但它属于"看起来是站内、其实是站外"的一类误导，成本一行代码，所以顺手修掉。
 
+## 34. 发布流水线（Actions 构建发行包）
+
+### 34.1 为什么交给 CI
+
+发版曾经是「本机 `package.ps1` 打包 + 个人 PAT 上传」，两次踩在同一处：令牌要么过期、要么因为出现在对话与脚本里被判暴露而必须撤销。个人令牌是发布链路上最脆的一环，而它保管的东西（两个可执行文件、一个源码包、一份校验和）本来就该由标签推导出来。
+
+现在改成 `.github/workflows/release.yml`：`push` 一个 `v*` 标签即触发，用仓库内置的 `GITHUB_TOKEN` 构建并发布。维护者不再持有发布凭据——凭证的粒度从「某个人能写所有东西」降到「这个仓库这一次 tag 能发一个 Release」。
+
+### 34.2 流水线四段
+
+| 阶段 | 做什么 | 关键点 |
+| --- | --- | --- |
+| `version` | 从标签解析版本号，供后续 job 复用 | 单一来源，避免每个 job 各算一套 |
+| `linux` | `cargo build --release --locked --target x86_64-unknown-linux-musl` | `--locked` 使用提交的 `Cargo.lock`；`rust-toolchain.toml` 固定 1.99.0，由 rustup 自动安装 |
+| `windows` | `cargo build --release --locked` | 打包用 `tar.exe`（bsdtar）而非 `Compress-Archive`，后者写反斜杠分隔符，Linux 上解开是平铺文件 |
+| `publish` | `git archive` 出源码包、`sha256sum` 出校验和、`gh release create` 发布并回读 | 标题与正文从仓库内 `release-notes/<tag>.{title,md}` 显式按 UTF-8 读取 |
+
+### 34.3 静态链接判定被 CI 纠正过一次
+
+第一次跑 CI，构建成功但「校验静态链接」这一步失败：本地一直用 `ldd` 看 `not a dynamic executable`，而 musl 静态二进制在 glibc 主机上 `ldd` 只打印 `statically linked`，于是判断恒假。
+
+改成读程序头：`readelf -l "$BIN" | grep -q INTERP` 命中即失败（有 `PT_INTERP` 就意味着依赖动态加载器），同时打印 `file` 的输出留档。这与本地 `deploy/elfinfo.js` 的判据是同一个口径。
+
+顺带修掉一个打包 bug：Linux 包原来写 `(cd dist && zip -qr "$D.zip" "../$D")`，会把 `../` 前缀写进 zip 条目；改成先 `zip` 再 `tar`。
+
+### 34.4 验证（2026-10-24）
+
+- 运行 `40084284054`：四个 job 全 success（前一次 `40084019192` 正是失败在 34.3 那个判断上）。
+- Release `v0.1.2`：`draft=false`、标题 `Nexus 枢纽 v0.1.2`、正文取自 `release-notes/v0.1.2.md`，五个资产 `state=uploaded`。
+- 模拟用户下载：取 `SHA256SUMS.txt` 与两个 zip，实际哈希与清单逐字节一致；解开 Linux 包，顶层目录 `nexus-0.1.2-linux-x86_64/` 齐全（`nexus`、`static/`、`deploy/`、`migrations/`、`README.md`、`DESIGN.md`、`.env.example`），二进制 `PT_INTERP=none`。
+- CI 产物与本机 zig 交叉编译产物**不必字节相同**（链接器不同：8.03 MB vs 7.68 MB），但都满足「绝对静态」这条唯一硬约束。
+
+### 34.5 已知取舍
+
+1. **CI 每次全量编译**（约 5 分钟，两个平台并行），没有缓存 `~/.cargo` 与 `target/`；在当前的发布频率下，不值得为省 3 分钟引入缓存失效的风险。
+2. **Windows 包没有代码签名**，首次运行会有 SmartScreen 提示；这是未购证书的必然结果，不是缺陷。
+3. **Release 资产发布后不再替换**；要改只能发新版本。（`v0.1.2` 曾因修正 34.3 的校验步骤重新打过标签，但那两次都还没有发布任何资产。）

@@ -45,13 +45,16 @@ DESIGN.md        全部契约、裁决与实测记录（本项目的唯一权威
 
 ## 发行包
 
-每次发布在 [Releases](https://github.com/godgu1248/Nexus/releases) 附三个压缩包，文件名带版本号：
+每次发布在 [Releases](https://github.com/godgu1248/Nexus/releases) 附四个压缩包与一份校验和，文件名带版本号：
 
 | 包 | 内容 | 用途 |
 | --- | --- | --- |
 | `nexus-<版本>-source.zip` | `git archive` 导出的完整源码（不含 `target/`、`.env`） | 自己编译、审计代码 |
-| `nexus-<版本>-linux-x86_64.zip` | `nexus` 静态二进制（musl，绝对静态）+ `static/` + `deploy/` + 文档 | 目标机直接跑，不需要 glibc |
+| `nexus-<版本>-linux-x86_64.zip` / `.tar.gz` | `nexus` 静态二进制（musl，绝对静态）+ `static/` + `deploy/` + 文档 | 目标机直接跑，不需要 glibc |
 | `nexus-<版本>-windows-x86_64.zip` | `nexus.exe` + `static/` + `deploy/` + 文档 | 本地试用、内网演示 |
+| `SHA256SUMS.txt` | 上述四个包的 SHA-256 | 下载后先 `sha256sum -c` 再解压 |
+
+这些包不是手工上传的：给仓库打一个 `v*` 标签，`.github/workflows/release.yml` 会用仓库自带的 `GITHUB_TOKEN`，从该标签重新构建 Linux（musl 静态）与 Windows 二进制、导出源码包、附上校验和并创建 Release。所以**任何一个 Release 都能由对应标签复现**，维护者不需要持有个人令牌。
 
 两个二进制包都不含 `.env`：配置项见 `.env.example`，`DATABASE_URL` 是唯一必填项。包内 `deploy/` 放着 systemd unit、nginx 配置与上传目录脚本，与线上跑的是同一份。
 
