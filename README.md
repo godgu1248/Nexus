@@ -56,15 +56,21 @@ DESIGN.md        全部契约、裁决与实测记录（本项目的唯一权威
 
 这些包不是手工上传的：给仓库打一个 `v*` 标签，`.github/workflows/release.yml` 会用仓库自带的 `GITHUB_TOKEN`，从该标签重新构建 Linux（musl 静态）与 Windows 二进制、导出源码包、附上校验和并创建 Release。所以**任何一个 Release 都能由对应标签复现**，维护者不需要持有个人令牌。
 
-到 github.com 的链路不稳定时（超时、TLS 握手失败，表现为「点了没反应」而不是「没有文件」），可以用同一份文件的镜像：
+到 github.com 的链路不稳定时（超时、TLS 握手失败，表现为「点了没反应」而不是「没有文件」），可以用同一份文件的完整镜像：
 
 ```
 https://flowrun.cloud/downloads/nexus-<版本>-linux-x86_64.zip
+https://flowrun.cloud/downloads/nexus-<版本>-linux-x86_64.tar.gz
 https://flowrun.cloud/downloads/nexus-<版本>-windows-x86_64.zip
+https://flowrun.cloud/downloads/nexus-<版本>-source.zip
 https://flowrun.cloud/downloads/SHA256SUMS.txt
+https://flowrun.cloud/downloads/MIRROR.txt
 ```
 
-镜像里的字节与 Release 资产完全一致（哈希对得上），目录说明见同路径的 `MIRROR.txt`。
+镜像里的字节与 Release 资产完全一致（`sha256sum -c` 能过），目录说明见 `MIRROR.txt`。
+另外 `https://flowrun.cloud/downloads/local-build/` 还放了维护者本机用 `package.ps1` 打的那一套：
+源码相同、链接器不同，所以 Linux 二进制字节不一样，带自己的 `SHA256SUMS.txt` 与 `NOTE.txt`。
+要「与 Release 逐字节一致」用上面那组，要「维护者本机验证过的那份」用子目录。
 
 两个二进制包都不含 `.env`：配置项见 `.env.example`，`DATABASE_URL` 是唯一必填项。包内 `deploy/` 放着 systemd unit、nginx 配置与上传目录脚本，与线上跑的是同一份。
 
