@@ -51,13 +51,15 @@ jobs:
         run: cargo build --release --locked --target x86_64-unknown-linux-musl
       - name: 校验静态链接
         run: |
-          file target/x86_64-unknown-linux-musl/release/nexus
-          if ldd target/x86_64-unknown-linux-musl/release/nexus 2>&1 | grep -q 'not a dynamic executable'; then
-            echo "static ok"
-          else
-            echo "::error::binary is dynamically linked"
+          BIN=target/x86_64-unknown-linux-musl/release/nexus
+          file "$BIN"
+          # musl 静态二进制在 glibc 主机上 `ldd` 只说 "statically linked"，
+          # 用程序头里有没有 PT_INTERP 判定更可靠（有 = 动态加载器依赖）。
+          if readelf -l "$BIN" | grep -q 'INTERP'; then
+            echo "::error::binary still has PT_INTERP (dynamic loader)"
             exit 1
           fi
+          echo "static ok: no PT_INTERP"
       - name: 打包
         run: |
           set -eu
