@@ -21,6 +21,12 @@
     <label for="title">标题</label>
     <input id="title" name="title" type="text" maxlength="{{ title_max }}" value="{{ title_value }}" required>
 
+    <label for="audience">受众</label>
+    <select id="audience" name="audience">
+      {%- for a in audiences %}
+      <option value="{{ a.key }}"{% if a.selected %} selected{% endif %}>{{ a.label }} —— {{ a.hint }}</option>
+      {%- endfor %}
+    </select>
     <label for="body">正文</label>
     {% call editor::render("body", "body", "body_html", body_value, 6, body_max) %}{% endcall %}
 

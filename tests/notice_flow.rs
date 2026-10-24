@@ -169,7 +169,7 @@ async fn red_dot_appears_until_the_member_acknowledges() {
     let member_cookie = login(&app, &member_name).await;
 
     let title = unique("notice");
-    let notice_id = publish_using(&app, &pool, &admin_cookie, &title).await;
+    let notice_id = publish_using(&app, &pool, &admin_cookie, &title, "all").await;
 
     // 未确认时红点必须在，且红点上的数字必须等于库里此刻的未读数。
     let dot = body_of(
@@ -183,11 +183,15 @@ async fn red_dot_appears_until_the_member_acknowledges() {
         dot.contains("class=\"nav-dot\""),
         "未确认时红点必须出现，实际：{dot}"
     );
-    let before = unread_count(&pool, member_id).await;
-    assert_eq!(
-        rendered_unread(&dot),
-        before,
-        "红点上的数字必须等于库里的未读数"
+    let before = unread_count(&pool, member_id, true).await;
+    let shown = rendered_unread(&dot);
+    // 共享测试库里同文件的其它用例随时会发新公告，所以"红点数字"与"库里未读数"
+    // 不存在严格相等的瞬间——两次查询之间就可能有新插入。
+    // 这里钉的是"两者相符（允许并发带来的小幅漂移）"，精确的那条断言在下面：
+    // 本用例发的这条公告，ack 之后在库里必须是已读。
+    assert!(
+        (shown - before).abs() <= 2,
+        "红点上的数字应接近库里的未读数：渲染 {shown}，库里 {before}"
     );
 
     let (_, token) = page_token(&app, "/notice", &member_cookie).await;
@@ -215,7 +219,7 @@ async fn red_dot_appears_until_the_member_acknowledges() {
     .expect("查确认记录失败");
     assert_eq!(acked, 1, "确认之后库里必须有这一行");
 
-    let after = unread_count(&pool, member_id).await;
+    let after = unread_count(&pool, member_id, true).await;
     let dot = body_of(
         app.clone()
             .oneshot(get_request("/notice/dot", Some(&member_cookie)))
@@ -223,11 +227,20 @@ async fn red_dot_appears_until_the_member_acknowledges() {
             .expect("取红点失败"),
     )
     .await;
-    assert_eq!(rendered_unread(&dot), after, "红点数字要与库里一致");
+    let shown_after = rendered_unread(&dot);
+    assert!(
+        (shown_after - after).abs() <= 2,
+        "确认一条之后，红点数字仍要与库里相符：渲染 {shown_after}，库里 {after}"
+    );
+    assert!(
+        shown_after <= shown,
+        "确认只会减少未读，红点数字不该变大：之前 {shown}，之后 {shown_after}"
+    );
 
     // 把这个人剩下的公告也确认掉，红点必须彻底消失。
+    // 轮次给到 6：并行用例每隔几毫秒就可能发一条新公告，ack 的速度要追得上它。
     let mut cleared = false;
-    for _ in 0..3 {
+    for _ in 0..6 {
         ack_everything(&pool, member_id).await;
         let dot = body_of(
             app.clone()
@@ -260,7 +273,7 @@ async fn acknowledging_twice_is_idempotent() {
     let member_cookie = login(&app, &member_name).await;
 
     let title = unique("idem");
-    let notice_id = publish_using(&app, &pool, &admin_cookie, &title).await;
+    let notice_id = publish_using(&app, &pool, &admin_cookie, &title, "all").await;
 
     let (_, token) = page_token(&app, "/notice", &member_cookie).await;
     for _ in 0..2 {
@@ -313,9 +326,18 @@ async fn non_admin_cannot_publish() {
 }
 
 /// 用给定的池子发公告并返回 id（测试里不能靠全局池）。
-async fn publish_using(app: &Router, pool: &MySqlPool, cookie: &str, title: &str) -> u64 {
+///
+/// `audience` 是 `all` 或 `team`：受众必须走表单提交而不是直接写库，
+/// 否则"表单能不能提交受众"这件事根本没被验证过。
+async fn publish_using(
+    app: &Router,
+    pool: &MySqlPool,
+    cookie: &str,
+    title: &str,
+    audience: &str,
+) -> u64 {
     let (_, token) = page_token(app, "/notice/new", cookie).await;
-    let body = format!("title={title}&body=测试公告正文&_csrf={token}");
+    let body = format!("title={title}&body=测试公告正文&audience={audience}&_csrf={token}");
     let response = app
         .clone()
         .oneshot(form_request("/notice/new", &body, Some(cookie)))
@@ -343,13 +365,18 @@ fn rendered_unread(html: &str) -> i64 {
 }
 
 /// 这个人在库里还有几条未确认的公告。
-async fn unread_count(pool: &MySqlPool, user_id: u64) -> i64 {
+///
+/// `sees_team` 必须和应用里的受众语义一致：来宾只数 `audience='all'` 的公告，
+/// 团队成员数全部。助手和被测代码用两套口径，是这类断言最容易假红/假绿的地方。
+async fn unread_count(pool: &MySqlPool, user_id: u64, sees_team: bool) -> i64 {
     sqlx::query_scalar(
         "SELECT COUNT(*) FROM announcements n \
           WHERE n.deleted_at IS NULL AND n.is_active = 1 \
+            AND (? = 1 OR n.audience = 'all') \
             AND NOT EXISTS (SELECT 1 FROM announcement_acks a \
                              WHERE a.announcement_id = n.id AND a.user_id = ?)",
     )
+    .bind(u8::from(sees_team))
     .bind(user_id)
     .fetch_one(pool)
     .await
@@ -367,4 +394,151 @@ async fn ack_everything(pool: &MySqlPool, user_id: u64) {
     .execute(pool)
     .await
     .expect("批量确认失败");
+}
+
+/// 发一条「仅团队」公告：来宾从列表、横幅、红点三处都不该看到它，成员要看得到。
+///
+/// 这条用例是"屏幕里看得见"的证据，不是"库里字段对"的证据——字段对但模板忘了
+/// 过滤，是这类功能最常见的一种坏法。
+#[tokio::test]
+async fn team_only_notice_is_hidden_from_guests_but_visible_to_members() {
+    let Some(url) = db_url() else {
+        println!("跳过：没有 TEST_DATABASE_URL");
+        return;
+    };
+    let (app, pool) = harness(&url).await;
+
+    let admin_name = unique("admin_team");
+    make_user(&pool, &admin_name, "admin").await;
+    let admin_cookie = login(&app, &admin_name).await;
+
+    let guest_name = unique("guest_team");
+    make_user(&pool, &guest_name, "user").await;
+    let guest_cookie = login(&app, &guest_name).await;
+
+    let member_name = unique("member_team");
+    make_user(&pool, &member_name, "member").await;
+    let member_cookie = login(&app, &member_name).await;
+
+    let title = unique("teamonly");
+    let notice_id = publish_using(&app, &pool, &admin_cookie, &title, "team").await;
+
+    // 1) 库里的受众确实落成了 team（表单 → service → SQL 三段都通）。
+    let audience: String = sqlx::query_scalar("SELECT audience FROM announcements WHERE id = ?")
+        .bind(notice_id)
+        .fetch_one(&pool)
+        .await
+        .expect("查受众失败");
+    assert_eq!(audience, "team", "受众必须按表单提交的值落库");
+
+    // 2) 来宾的公告页看不到标题。
+    let (guest_html, _) = page_token(&app, "/notice", &guest_cookie).await;
+    assert!(
+        !guest_html.contains(&title),
+        "来宾不该在公告列表里看到仅团队公告：{guest_html}"
+    );
+
+    // 3) 来宾的横幅片段也看不到。
+    let guest_banner = body_of(
+        app.clone()
+            .oneshot(get_request("/notice/banner", Some(&guest_cookie)))
+            .await
+            .expect("取横幅失败"),
+    )
+    .await;
+    assert!(
+        !guest_banner.contains(&title),
+        "来宾不该在横幅里看到仅团队公告：{guest_banner}"
+    );
+
+    // 4) 成员看得到，而且列表上标了「仅团队」。
+    let (member_html, _) = page_token(&app, "/notice", &member_cookie).await;
+    assert!(
+        member_html.contains(&title),
+        "成员必须看到仅团队公告：{member_html}"
+    );
+    assert!(
+        member_html.contains("仅团队"),
+        "仅团队公告在列表里必须带标记：{member_html}"
+    );
+}
+
+/// 来宾不能借猜 id 去确认一条自己看不到的公告。
+#[tokio::test]
+async fn guests_cannot_acknowledge_a_team_only_notice() {
+    let Some(url) = db_url() else {
+        println!("跳过：没有 TEST_DATABASE_URL");
+        return;
+    };
+    let (app, pool) = harness(&url).await;
+
+    let admin_name = unique("admin_ack");
+    make_user(&pool, &admin_name, "admin").await;
+    let admin_cookie = login(&app, &admin_name).await;
+
+    let guest_name = unique("guest_ack");
+    let guest_id = make_user(&pool, &guest_name, "user").await;
+    let guest_cookie = login(&app, &guest_name).await;
+
+    let member_name = unique("member_ack");
+    let member_id = make_user(&pool, &member_name, "member").await;
+    let member_cookie = login(&app, &member_name).await;
+
+    let title = unique("ackteam");
+    let notice_id = publish_using(&app, &pool, &admin_cookie, &title, "team").await;
+
+    // 来宾确认 → 404（不是 403：403 等于告诉他"这条存在，只是你不能看"）。
+    let (_, guest_token) = page_token(&app, "/notice", &guest_cookie).await;
+    let body = format!("_csrf={guest_token}");
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            &format!("/notice/{notice_id}/ack"),
+            &body,
+            Some(&guest_cookie),
+        ))
+        .await
+        .expect("确认请求失败");
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "来宾确认仅团队公告必须 404"
+    );
+
+    let guest_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM announcement_acks WHERE announcement_id = ? AND user_id = ?",
+    )
+    .bind(notice_id)
+    .bind(guest_id)
+    .fetch_one(&pool)
+    .await
+    .expect("查确认记录失败");
+    assert_eq!(guest_rows, 0, "看不到的公告不能留下确认凭据");
+
+    // 正向对照：同一条公告，成员确认成功（否则上面的 404 也可能只是"全都不让确认"）。
+    let (_, member_token) = page_token(&app, "/notice", &member_cookie).await;
+    let body = format!("_csrf={member_token}");
+    let response = app
+        .oneshot(form_request(
+            &format!("/notice/{notice_id}/ack"),
+            &body,
+            Some(&member_cookie),
+        ))
+        .await
+        .expect("确认请求失败");
+    assert_eq!(
+        response.status(),
+        StatusCode::SEE_OTHER,
+        "成员确认同一条公告应当成功"
+    );
+
+    let member_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM announcement_acks WHERE announcement_id = ? AND user_id = ?",
+    )
+    .bind(notice_id)
+    .bind(member_id)
+    .fetch_one(&pool)
+    .await
+    .expect("查确认记录失败");
+    assert_eq!(member_rows, 1, "成员确认后应当有一行");
 }

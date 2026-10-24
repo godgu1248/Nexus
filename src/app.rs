@@ -382,6 +382,44 @@ mod view_tests {
         );
     }
 
+    #[test]
+    fn guests_lose_the_tasks_entry_but_keep_the_read_only_ones() {
+        let mut view = index_view();
+        view.nav_display_name = "小外来宾".to_string();
+        view.nav_is_guest = true;
+        let html = view.render().expect("渲染失败");
+
+        // 来宾点「任务」必然 403（任务对 role=user 不可见），
+        // 与其让他点进去撞一堵墙，不如这个入口根本不存在。
+        assert!(
+            !html.contains("href=\"/tasks\""),
+            "来宾不该看到任务入口：{html}"
+        );
+        assert!(
+            !html.contains("我的任务"),
+            "首页的「我的任务」按钮也属于同一类入口：{html}"
+        );
+        // 论坛/档案/小组/前厅来宾仍然能进（看到公开部分），不能顺手一起藏掉。
+        for opened in ["/forum", "/kb", "/groups", "/lobby"] {
+            assert!(
+                html.contains(&format!("href=\"{opened}\"")),
+                "来宾仍应看到 {opened}：{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn members_keep_the_tasks_entry() {
+        let mut view = index_view();
+        view.nav_display_name = "阿岚".to_string();
+        let html = view.render().expect("渲染失败");
+        assert!(
+            html.contains("<a class=\"nav-link\" href=\"/tasks\">任务</a>"),
+            "成员必须能看到任务入口：{html}"
+        );
+        assert!(html.contains("我的任务"), "成员首页保留「我的任务」按钮");
+    }
+
     /// 只用来渲染两个碎片宏的临时模板。列页面还没实现，但宏必须先被真正渲染过一次。
     #[derive(Template)]
     #[template(

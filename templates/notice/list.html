@@ -17,7 +17,7 @@
     {%- for n in unread %}
     <article class="notice notice--announcement">
       <div class="notice__text">
-        <strong>{{ n.title }}</strong>
+        <strong>{{ n.title }}</strong>{%- if n.team_only %} <span class="badge badge--internal">仅团队</span>{% endif %}
         <span class="muted"> · {{ n.author_name }} · {{ n.created_at }}</span>
         {%- match n.body_html %}
         {%- when Some with (html) %}
@@ -45,7 +45,7 @@
     {%- for n in all %}
     <article class="notice">
       <div class="notice__text">
-        <strong>{{ n.title }}</strong>
+        <strong>{{ n.title }}</strong>{%- if n.team_only %} <span class="badge badge--internal">仅团队</span>{% endif %}
         <span class="muted"> · {{ n.author_name }} · {{ n.created_at }}</span>
         {%- match n.body_html %}
         {%- when Some with (html) %}

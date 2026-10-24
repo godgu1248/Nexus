@@ -20,7 +20,9 @@
     <a class="nav-link{% if section == "notice" %} is-current{% endif %}" href="/notice"{% if section == "notice" %} aria-current="page"{% endif %}>公告<span id="notice-dot" class="nav-dot-slot" hx-get="/notice/dot" hx-trigger="load" hx-swap="outerHTML"></span></a>
     <a class="nav-link{% if section == "forum" %} is-current{% endif %}" href="/forum"{% if section == "forum" %} aria-current="page"{% endif %}>论坛</a>
     <a class="nav-link{% if section == "kb" %} is-current{% endif %}" href="/kb"{% if section == "kb" %} aria-current="page"{% endif %}>档案</a>
+    {%- if !is_guest %}
     <a class="nav-link{% if section == "tasks" %} is-current{% endif %}" href="/tasks"{% if section == "tasks" %} aria-current="page"{% endif %}>任务</a>
+    {%- endif %}
     <a class="nav-link{% if section == "groups" %} is-current{% endif %}" href="/groups"{% if section == "groups" %} aria-current="page"{% endif %}>小组</a>
     <a class="nav-link{% if section == "lobby" %} is-current{% endif %}" href="/lobby"{% if section == "lobby" %} aria-current="page"{% endif %}>前厅</a>
   </nav>

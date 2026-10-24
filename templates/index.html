@@ -18,7 +18,9 @@
     <a class="btn btn--ghost" href="/lobby">看看前厅</a>
     {%- else %}
     <a class="btn btn--primary" href="/forum">进入论坛</a>
+    {%- if !nav_is_guest %}
     <a class="btn btn--ghost" href="/tasks">我的任务</a>
+    {%- endif %}
     <a class="btn btn--ghost" href="/kb">查档案</a>
     {%- endif %}
   </div>
@@ -40,11 +42,13 @@
     <div class="feature__title">小组</div>
     <p class="feature__desc">把内容收进小组可见 —— 没进组的人连标题都看不到。</p>
   </a>
+  {%- if !nav_is_guest %}
   <a class="feature" href="/tasks">
     <span class="feature__icon" aria-hidden="true">☑</span>
     <div class="feature__title">任务</div>
     <p class="feature__desc">谁负责、做到哪一步、什么时候交，一屏看完，不漏事。</p>
   </a>
+  {%- endif %}
   <a class="feature" href="/lobby">
     <span class="feature__icon" aria-hidden="true">◇</span>
     <div class="feature__title">前厅</div>
