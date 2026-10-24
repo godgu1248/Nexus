@@ -2,7 +2,7 @@
 
 一套面向中小型企业的内部协作解决方案。三个区：**内厅**（论坛、小组、任务）、**档案**（树形知识库）、**前厅**（对外只读 + 评论点赞 + 投稿待审）。
 
-服务端渲染、无前端工程链：Axum + Askama + HTMX/Alpine，MySQL 8 + SQLx，单二进制 + systemd，静态文件由 Caddy 直出。
+服务端渲染、无前端工程链：Axum + Askama + HTMX/Alpine，MySQL 8 + SQLx，单二进制 + systemd，静态文件由反向代理直出（生产用 nginx，见 `deploy/nginx.conf`）。
 
 ## 技术栈（版本已锁定，见 `DESIGN.md §1`）
 
@@ -25,21 +25,35 @@ src/
   error.rs       AppError + IntoResponse，错误页内置（不走模板，避免递归）
   db.rs          连接池（after_connect 强制 time_zone='+00:00'）、迁移、ping
   state.rs       AppState
-  shared/        分页、校验、可见性枚举、审计、HTTP 小工具
-  auth/          注册/登录/登出/session、policy 四函数、中间件提取器
+  shared/        分页、校验、可见性枚举、审计、HTTP 小工具、富文本净化、外观目录
+  auth/          注册/登录/登出/session、policy 四函数、中间件提取器、界面设置
   forum/         空间 → 议题 → 回复
   group/         小组与成员
-  kb/            树形档案（草稿/发布、议题沉淀、搜索）
+  kb/            树形档案（草稿/发布、议题沉淀、搜索、置顶）
   task/          任务（指派、状态流转、从议题生成）
   public/        前厅（评论、点赞、投稿、待审队列）
   admin/         管理台（成员、申请、投稿、审计查看）
+  notice/        公告（发布、导航红点、逐人确认）
+  media/         图片上传（内容寻址、magic bytes 校验、4 MiB 上限）
 templates/       Askama 模板（layout + 各模块子目录）
-migrations/      0001–0007，编译期嵌入二进制
-static/          app.css / app.js / htmx.min.js（Caddy 直出）
+migrations/      0001–0012，编译期嵌入二进制
+static/          app.css / app.js / editor.js / htmx.min.js（反向代理直出）
 tests/           集成测试（走线上路由装配，需 TEST_DATABASE_URL）
-deploy/          systemd unit 与 Caddyfile
+deploy/          systemd unit、nginx.conf（Caddyfile 为早期方案，保留作参考）
 DESIGN.md        全部契约、裁决与实测记录（本项目的唯一权威文档）
 ```
+
+## 发行包
+
+每次发布在 [Releases](https://github.com/godgu1248/Nexus/releases) 附三个压缩包，文件名带版本号：
+
+| 包 | 内容 | 用途 |
+| --- | --- | --- |
+| `nexus-<版本>-source.zip` | `git archive` 导出的完整源码（不含 `target/`、`.env`） | 自己编译、审计代码 |
+| `nexus-<版本>-linux-x86_64.zip` | `nexus` 静态二进制（musl，绝对静态）+ `static/` + `deploy/` + 文档 | 目标机直接跑，不需要 glibc |
+| `nexus-<版本>-windows-x86_64.zip` | `nexus.exe` + `static/` + `deploy/` + 文档 | 本地试用、内网演示 |
+
+两个二进制包都不含 `.env`：配置项见 `.env.example`，`DATABASE_URL` 是唯一必填项。包内 `deploy/` 放着 systemd unit、nginx 配置与上传目录脚本，与线上跑的是同一份。
 
 ## 本地运行
 
