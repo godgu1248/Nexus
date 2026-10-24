@@ -2878,3 +2878,99 @@ owner 原话：「论坛的新建分区也不要设置排序，而是按照热�
 4. **磁盘清理没有自动化**：`media` 表与文件只增不减；180 天保留期只对审计有约定。
 5. **没有图片尺寸检测**：`width` 属性信任用户输入（只做 1..=2400 的整数校验），不读真实像素尺寸。
 
+## 33. 代码审查记录（v0.1.0 之后）
+
+发布 `v0.1.0` 之后做了一轮系统性审查：权限矩阵、CSRF 覆盖、SQL 绑参、XSS 净化、
+错误映射、迁移一致性。查出三个真问题，其中一个足以让线上起不来。
+
+### 33.1 迁移文件一旦发布就是只读的（上线级）
+
+**现象**：本地跑 `cargo test`，所有需要建池的用例一起失败：
+
+```text
+建池失败: Internal(数据库迁移失败
+Caused by:
+    migration 2 was previously applied but has been modified)
+```
+
+**根因**：上一轮把 README / DESIGN / 注释里的「10 人团队」改成「中小型企业」时，
+顺手改了 `migrations/0002_forum.sql` 与 `migrations/0005_tasks.sql` 的注释。
+sqlx 把每个迁移文件的**内容摘要**记在 `_sqlx_migrations.checksum` 里，
+文件字节一变就视为"历史被篡改"，直接拒绝启动——这是防错设计，不是 bug。
+
+**为什么危险**：生产库里的 checksum 是旧的，而新编译的二进制内嵌的是新摘要。
+下一次重启才会炸，且炸在启动阶段（`init_pool` 返回 `Err`），表现为"进程起不来"，
+而不是某个页面 500。它绕过了所有页面级验收。
+
+**处置**：`git checkout 8c17d76 -- migrations/0002_forum.sql migrations/0005_tasks.sql`
+恢复出厂字节（`git diff --exit-code 8c17d76 -- migrations/` 为空），
+文案改动只留在 README / DESIGN / 源码注释里。
+
+**纪律**：迁移文件是**只读历史**。要改措辞、要补注释，宁可新开一个迁移，
+也不回头动已经发布过的那个。想改结构只能新增 `0013_*.sql`。
+
+### 33.2 档案列表 / 最近 / 搜索把 internal 当成"登录即可见"
+
+**现象**：自助注册的 `user`（界面上的"来宾"）登录后，在 `/kb` 列表、首页"最近更新"
+和 `/kb/search` 里能看到 `internal` 档案的标题，但点进去是 404。
+
+**根因**：`src/kb/model.rs` 的三条列表类 SQL 里，登录分支只判
+
+```sql
+AND (d.visibility IN ('public', 'internal') OR (d.visibility = 'group' AND EXISTS (...)))
+```
+
+即"登录了就能看 internal"。而 `policy::can_view(Internal)` 只给 `member` / `admin`。
+单篇详情走 `visible_detail` → `can_see` → policy，所以详情是对的——
+于是出现"看得见标题、点不进正文"这种最难自查的状态。
+对比：`src/forum/model.rs` 有 `visible_spaces()` 做后置白名单过滤，档案没有。
+
+**修法**：`Viewer` 增加 `internal_ok: u8`，由
+`policy::can_view(Some(user), &ContentCtx::new(Visibility::Internal, None, None))` 算出，
+四处 SQL（`list_cards` / `list_recent` / `search_docs` 的 rows 与 total）改成：
+
+```sql
+AND (d.visibility = 'public'
+     OR (d.visibility = 'internal' AND ? = 1)
+     OR (d.visibility = 'group' AND EXISTS (...)))
+```
+
+**关键点**：判据是 policy，不是 `viewer.id.is_some()`。
+"已登录"和"能读内部"是两件事，来宾正是两者不重合的那一格。
+
+**回归测试**：`tests/kb_flow.rs::plain_users_never_see_internal_docs_in_list_recent_or_search`。
+它同时断言**成员看得见**（正向对照）——这一半比负向断言更重要，见 33.3。
+
+### 33.3 绑参顺序：修 33.2 时我自己引入的第二个 bug
+
+**现象**：正向对照先红——成员搜不到自己的内部档案。
+
+**根因**：`search_docs` 的 SQL 里 `LIKE ?` 排在可见性判断**之前**，
+而我把 `.bind(viewer.internal_ok)` 插在了 `.bind(viewer.is_admin)` 后面，
+于是 `? = 1` 拿到的是搜索词、`LIKE` 拿到的是 0/1，条件永远不成立。
+`list_cards` / `list_recent` 没有 LIKE 子句，同样插法却是对的——
+**绑参顺序跟着 SQL 文本顺序走，不是跟着"逻辑分组"走。**
+
+**教训**：任何"只加一个 bind"的改动都要从头数一遍文本里的 `?`。
+这也是为什么 33.2 的测试必须先断言"该看见的人看得见"：
+只写负向断言（来宾看不到）时，绑参错位会让它**假绿**。
+
+### 33.4 审查覆盖到的、确认没问题的部分
+
+| 检查项 | 结论 |
+| --- | --- |
+| POST 路由的 CSRF | 42 条 POST 路由全部调用 `middleware::require_csrf`（脚本逐条比对函数体） |
+| SQL 注入 | 全仓 `sqlx::query()` 只接 `&'static str`，用户输入一律 `.bind()`；sqlx 0.9 的 `SqlSafeStr` 让 `format!` 拼 SQL 编不过 |
+| XSS | Askama 默认转义；富文本只有 `richtext::sanitize` 的白名单输出会被 `|safe` |
+| 权限矩阵 | `policy` 四函数 60 格矩阵测试 + `in_group` 三条失败关闭 |
+| 敏感错误 | 500 不泄漏 SQL / 路径 / 堆栈（有测试钉死）；SQLSTATE 23000 转 Conflict |
+| 未捕获 panic | `src/` 下的 `unwrap/expect` 只在 `#[cfg(test)]` 或可证明不可失败的默认值 |
+
+### 33.5 记下但本轮不改的三条
+
+1. **`media` 上传只要求登录**：来宾也能传图（每张 ≤ 4 MiB、内容寻址去重）。
+   真正要防的是恶意刷盘，需要配额表或按角色的限额，属于新需求不是修 bug。
+2. **`tasks` 对来宾回 403 而不是 404**：`require_reader` 走 `policy` 直接拒绝，
+   403 等于承认"这里有任务模块"。与档案刻意统一成 404 的口径不一致，待统一。
+3. **公告对所有登录者可见**：`announcements` 没有 `visibility` 列，
+   来宾也能看到团队公告。产品上要不要收紧到 `member`，需要 owner 拍板。

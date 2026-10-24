@@ -77,21 +77,31 @@ pub struct NewDoc<'a> {
     pub is_published: bool,
 }
 
-/// 观察者口径：登录者的 id 与是否 admin，游客两者皆无。
+/// 观察者口径：登录者的 id、是否 admin、能不能读 internal，游客三者皆无。
+///
+/// `internal_ok` 不是"已登录"的同义词：自助注册的 `user`（来宾）登录了，
+/// 但 `policy::can_view(Internal)` 对他是否。列表与搜索的 SQL 里必须用这个
+/// 判定，而不是用 `viewer.id.is_some()`——否则来宾会从列表/最近/搜索这三条
+/// 侧门看到内部档案，而单篇详情（走 `visible_detail` → `can_see` → policy）
+/// 又是拒绝的，界面上就会表现为"点进去 404 但列表里看得见标题"。
 struct Viewer {
     id: Option<u64>,
     is_admin: u8,
+    internal_ok: u8,
 }
 
 fn viewer_of(viewer: Option<&CurrentUser>) -> Viewer {
+    let internal = policy::ContentCtx::new(Visibility::Internal, None, None);
     match viewer {
         None => Viewer {
             id: None,
             is_admin: 0,
+            internal_ok: 0,
         },
         Some(user) => Viewer {
             id: Some(user.id),
             is_admin: u8::from(policy::can_admin(Some(user))),
+            internal_ok: u8::from(policy::can_view(Some(user), &internal)),
         },
     }
 }
@@ -222,7 +232,8 @@ async fn list_cards(
           WHERE d.deleted_at IS NULL \
             AND d.parent_id <=> ? \
             AND (d.is_published = 1 OR d.author_id = ? OR ? = 1) \
-            AND (d.visibility IN ('public', 'internal') \
+            AND (d.visibility = 'public' \
+                 OR (d.visibility = 'internal' AND ? = 1) \
                  OR (d.visibility = 'group' AND EXISTS ( \
                        SELECT 1 FROM group_members gm \
                          JOIN member_groups g ON g.id = gm.group_id \
@@ -234,6 +245,7 @@ async fn list_cards(
     .bind(parent_id)
     .bind(viewer.id)
     .bind(viewer.is_admin)
+        .bind(viewer.internal_ok)
     .bind(viewer.id)
     .fetch_all(pool)
     .await?;
@@ -272,7 +284,8 @@ pub async fn list_recent(
            FROM kb_docs d \
           WHERE d.deleted_at IS NULL \
             AND (d.is_published = 1 OR d.author_id = ? OR ? = 1) \
-            AND (d.visibility IN ('public', 'internal') \
+            AND (d.visibility = 'public' \
+                 OR (d.visibility = 'internal' AND ? = 1) \
                  OR (d.visibility = 'group' AND EXISTS ( \
                        SELECT 1 FROM group_members gm \
                          JOIN member_groups g ON g.id = gm.group_id \
@@ -281,6 +294,7 @@ pub async fn list_recent(
     )
     .bind(viewer.id)
     .bind(viewer.is_admin)
+        .bind(viewer.internal_ok)
     .bind(viewer.id)
     .bind(limit)
     .fetch_all(pool)
@@ -567,7 +581,8 @@ pub async fn search_docs(
           WHERE d.deleted_at IS NULL \
             AND (d.is_published = 1 OR d.author_id = ? OR ? = 1) \
             AND (d.title LIKE ? ESCAPE '\\\\' OR d.body LIKE ? ESCAPE '\\\\') \
-            AND (d.visibility IN ('public', 'internal') \
+            AND (d.visibility = 'public' \
+                 OR (d.visibility = 'internal' AND ? = 1) \
                  OR (d.visibility = 'group' AND EXISTS ( \
                        SELECT 1 FROM group_members gm \
                          JOIN member_groups g ON g.id = gm.group_id \
@@ -578,6 +593,7 @@ pub async fn search_docs(
     .bind(viewer.is_admin)
     .bind(&pattern)
     .bind(&pattern)
+    .bind(viewer.internal_ok)
     .bind(viewer.id)
     .bind(limit)
     .bind(offset)
@@ -589,7 +605,8 @@ pub async fn search_docs(
           WHERE d.deleted_at IS NULL \
             AND (d.is_published = 1 OR d.author_id = ? OR ? = 1) \
             AND (d.title LIKE ? ESCAPE '\\\\' OR d.body LIKE ? ESCAPE '\\\\') \
-            AND (d.visibility IN ('public', 'internal') \
+            AND (d.visibility = 'public' \
+                 OR (d.visibility = 'internal' AND ? = 1) \
                  OR (d.visibility = 'group' AND EXISTS ( \
                        SELECT 1 FROM group_members gm \
                          JOIN member_groups g ON g.id = gm.group_id \
@@ -599,6 +616,7 @@ pub async fn search_docs(
     .bind(viewer.is_admin)
     .bind(&pattern)
     .bind(&pattern)
+    .bind(viewer.internal_ok)
     .bind(viewer.id)
     .fetch_one(pool)
     .await?;

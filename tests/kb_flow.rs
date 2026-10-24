@@ -996,3 +996,86 @@ async fn non_admin_cannot_pin() {
         "非 admin 置顶必须 403"
     );
 }
+
+/// 来宾（自助注册的 `role=user`）不该从列表、最近、搜索这三条"侧门"看到 internal 档案。
+///
+/// 这条测试钉的是 `kb::model::Viewer::internal_ok`：修之前这三条 SQL 只判
+/// "已登录"，于是详情页 404、列表里却躺着标题——用户看到的是"看得见、点不进"。
+/// 详情页那条路径本来就是对的（`visible_detail` → `can_see` → policy），
+/// 所以这里同时断言三个入口，防止下次只修一处。
+#[tokio::test]
+async fn plain_users_never_see_internal_docs_in_list_recent_or_search() {
+    let Some(url) = db_url() else {
+        println!("跳过：未设置 TEST_DATABASE_URL");
+        return;
+    };
+    let (app, pool) = harness(&url).await;
+
+    let suffix = unique("leak");
+    let author_name = format!("ml_{suffix}");
+    let guest_name = format!("gl_{suffix}");
+    let author_id = make_user(&pool, &author_name, "member").await;
+    make_user(&pool, &guest_name, "user").await;
+
+    let keyword = format!("inner{}", suffix.replace('_', ""));
+    let title = format!("内部档案 {suffix}");
+    let doc_id = seed_doc(
+        &pool,
+        author_id,
+        None,
+        &title,
+        &format!("只有成员能看 {keyword}"),
+        Visibility::Internal,
+        None,
+        true,
+    )
+    .await;
+
+    // 正向对照：成员看得见。少了这一半，红色可能来自"根本没查出来"而不是"过滤对了"。
+    let author_cookie = login(&app, &author_name).await;
+    let (author_html, _) = page_token(&app, "/kb", Some(&author_cookie)).await;
+    assert!(
+        author_html.contains(&title),
+        "成员应当能在档案列表里看到内部档案"
+    );
+    let (author_search, _) = page_token(
+        &app,
+        &format!("/kb/search?q={keyword}"),
+        Some(&author_cookie),
+    )
+    .await;
+    assert!(
+        author_search.contains(&title),
+        "成员应当能搜到内部档案；页面开头是：{}",
+        author_search.chars().take(600).collect::<String>()
+    );
+
+    // 来宾：列表看不见、搜索搜不到、详情 404（三者必须一致）。
+    let guest_cookie = login(&app, &guest_name).await;
+    let (guest_html, _) = page_token(&app, "/kb", Some(&guest_cookie)).await;
+    assert!(
+        !guest_html.contains(&title),
+        "来宾不该在档案列表里看到内部档案"
+    );
+    let (guest_search, _) = page_token(
+        &app,
+        &format!("/kb/search?q={keyword}"),
+        Some(&guest_cookie),
+    )
+    .await;
+    assert!(
+        !guest_search.contains(&title),
+        "来宾不该搜到内部档案：{guest_search}"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(get_request(&format!("/kb/{doc_id}"), Some(&guest_cookie)))
+        .await
+        .expect("请求失败");
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "来宾打开内部档案必须是 404"
+    );
+}
