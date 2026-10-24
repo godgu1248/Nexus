@@ -2974,3 +2974,19 @@ AND (d.visibility = 'public'
    403 等于承认"这里有任务模块"。与档案刻意统一成 404 的口径不一致，待统一。
 3. **公告对所有登录者可见**：`announcements` 没有 `visibility` 列，
    来宾也能看到团队公告。产品上要不要收紧到 `member`，需要 owner 拍板。
+
+### 33.6 收尾加固：URL 里的反斜杠
+
+审查白名单时补查了 URL 归一化，发现 `clean_url` 只挡空值、超长、控制字符与空白，
+没有挡反斜杠。浏览器对 http(s) 这类"特殊 scheme"会把 `\` 归一化成 `/`，
+于是 `/\evil.com/x` 与 `//evil.com/x` 等价——`safe_href` 里
+"以单个 `/` 开头即站内"的判断被绕过，标签写着站内、实际跳到站外。
+
+修法是在 `clean_url` 里直接拒掉含 `\` 的地址（图片与链接共用同一个入口，
+一处拦住两条路径），并补测试 `backslash_urls_are_rejected_because_browsers_normalize_them`：
+`<a href="/\evil.com/x">点我</a>` 只剩文本"点我"，`<img src="/uploads/\..\x.png">`
+整条丢弃，正常外链仍然保留 `rel` 加固。
+
+定级：**低危**（只影响链接指向，不构成 XSS——`javascript:` 与事件属性本来就被拒），
+但它属于"看起来是站内、其实是站外"的一类误导，成本一行代码，所以顺手修掉。
+

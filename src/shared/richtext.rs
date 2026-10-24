@@ -416,6 +416,12 @@ fn clean_url(raw: &str) -> Option<String> {
     if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return None;
     }
+    // 反斜杠必须拒绝：浏览器在 http(s) 这类特殊 scheme 里会把 `\` 归一化成 `/`，
+    // 于是 `/\evil.com` 与 `//evil.com` 等价——`safe_href` 里"以单个 `/` 开头"的
+    // 站内判断会被它绕过去，链接指向站外。
+    if value.contains('\\') {
+        return None;
+    }
     Some(value.to_owned())
 }
 
@@ -541,6 +547,21 @@ mod tests {
             "x"
         );
         assert_eq!(sanitize(r#"<img src="javascript:alert(1)">"#).as_str(), "");
+    }
+
+    #[test]
+    fn backslash_urls_are_rejected_because_browsers_normalize_them() {
+        // `/\evil.com` 在浏览器里会被归一化成 `//evil.com`，于是"以单个 / 开头"
+        // 的站内判断被绕过。链接与图片两条路径都必须在 clean_url 就拒掉。
+        assert_eq!(
+            sanitize(r#"<a href="/\evil.com/x">点我</a>"#).as_str(),
+            "点我"
+        );
+        assert_eq!(sanitize(r#"<img src="/uploads/\..\x.png">"#).as_str(), "");
+        assert_eq!(
+            sanitize(r#"<a href="https://ok.example/a">好链接</a>"#).as_str(),
+            r#"<a href="https://ok.example/a" rel="noopener noreferrer nofollow">好链接</a>"#
+        );
     }
 
     #[test]
