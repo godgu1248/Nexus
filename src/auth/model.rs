@@ -311,6 +311,26 @@ pub async fn count_active_admins(pool: &MySqlPool) -> Result<u64, AppError> {
     Ok(total)
 }
 
+/// 在**事务内**加锁数一数还能用的管理员，用于"最后一个管理员不许降级/停用/软删"。
+///
+/// 为什么不能用上面的 `count_active_admins`：那是事务外的一次普通读，
+/// 两个管理员同时把对方降级时，两边都读到 2、都通过检查、都提交，
+/// 结果一个 active admin 都不剩，而且**界面没有任何办法恢复**（只能改库）。
+/// `FOR UPDATE` 让后到的那笔事务在前一笔提交后重新读到最新值，于是它看到 1 并被拒绝。
+///
+/// 加锁范围是"当前所有 active admin 行"：这是一个小集合（团队就几个人），
+/// 但它同时钉住了"谁能进管理区"这个不变式。
+pub async fn lock_active_admins(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+) -> Result<u64, AppError> {
+    let ids: Vec<u64> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE role = 'admin' AND status = 'active' FOR UPDATE",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(ids.len() as u64)
+}
+
 /// 改角色。返回是否真的改了（false = 行不存在或本来就是这个角色）。
 pub async fn set_role(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,

@@ -214,7 +214,7 @@ async fn list_cards(
               WHERE d.deleted_at IS NULL AND d.visibility = 'public' AND d.is_published = 1 \
                 AND d.parent_id <=> ? \
               ORDER BY d.is_pinned DESC, d.pin_order ASC, \
-                     (d.view_count + 5 * (SELECT COUNT(*) FROM public_likes l2 WHERE l2.target_type = 'doc' AND l2.target_id = d.id)) DESC, \
+                     (d.view_count + 5 * like_count) DESC, \
                      d.updated_at DESC, d.id DESC",
         )
         .bind(parent_id)
@@ -239,7 +239,7 @@ async fn list_cards(
                          JOIN member_groups g ON g.id = gm.group_id \
                         WHERE gm.group_id = d.group_id AND gm.user_id = ? AND g.deleted_at IS NULL))) \
           ORDER BY d.is_pinned DESC, d.pin_order ASC, \
-                     (d.view_count + 5 * (SELECT COUNT(*) FROM public_likes l2 WHERE l2.target_type = 'doc' AND l2.target_id = d.id)) DESC, \
+                     (d.view_count + 5 * like_count) DESC, \
                      d.updated_at DESC, d.id DESC",
     )
     .bind(parent_id)

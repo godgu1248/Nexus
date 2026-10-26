@@ -329,33 +329,49 @@ impl FromRequestParts<AppState> for ClientIp {
 
 /// 取客户端 IP，用于失败计数与审计。
 ///
-/// 只有显式信任代理（`TRUST_PROXY=true`）时才读 `X-Forwarded-For`。默认不读：
-/// 任何人都能伪造这个头，按伪造的 IP 计数等于把限速开关交给攻击者。
+/// 只有显式信任代理（`TRUST_PROXY=true`）时才读代理头。默认不读：
+/// 任何人都能伪造这些头，按伪造的 IP 计数等于把限速开关交给攻击者。
+///
+/// 顺序是 `X-Real-IP` → `X-Forwarded-For` 的**最后一段** → socket 对端：
+/// nginx 用 `$remote_addr` 覆盖 `X-Real-IP`，用 `$proxy_add_x_forwarded_for`
+/// **追加** `X-Forwarded-For`，所以真实客户端在 XFF 的末尾，开头那一段是
+/// 客户端自己带进来的、完全可控的值。
 pub fn client_ip(
     headers: &HeaderMap,
     trust_proxy: bool,
     connect_info: Option<&ConnectInfo<SocketAddr>>,
 ) -> Option<String> {
-    if trust_proxy
-        && let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
-        && let Some(first) = value.split(',').next()
-    {
-        let candidate = first.trim();
-        if is_plausible_ip(candidate) {
-            return Some(candidate.to_owned());
+    if trust_proxy {
+        if let Some(value) = headers.get("x-real-ip").and_then(|v| v.to_str().ok())
+            && let Some(ip) = parse_ip(value)
+        {
+            return Some(ip);
+        }
+        if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+            && let Some(last) = value.rsplit(',').next()
+            && let Some(ip) = parse_ip(last)
+        {
+            return Some(ip);
         }
     }
     connect_info.map(|ConnectInfo(addr)| addr.ip().to_string())
 }
 
-/// `X-Forwarded-For` 是攻击者可控的字符串。长度上限 45（IPv6 文本形式的最大长度），
-/// 超过就直接丢掉——它会被写进审计表的 `ip` 列（VARCHAR(45)），超长会在写库时炸掉。
-fn is_plausible_ip(candidate: &str) -> bool {
-    !candidate.is_empty()
-        && candidate.len() <= 45
-        && candidate
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() || matches!(c, '.' | ':'))
+/// 只接受**真正的 IP 文本**，不是"看起来像 IP 的字符串"。
+///
+/// 早先这里只检查字符集（十六进制字母 + `.` + `:`），于是 `abc`、`deadbeef`
+/// 都被当成合法客户端 IP：限速键随便换，审计表的 `ip` 列也能被写成任意字符串。
+/// 现在交给 `IpAddr::from_str`，并归一化（`::1` 不会写成 `0:0:0:0:0:0:0:1`）。
+fn parse_ip(candidate: &str) -> Option<String> {
+    let candidate = candidate.trim();
+    // 45 是 IPv6 文本形式的最大长度；再长也塞不进 audit_logs.ip（VARCHAR(45)）。
+    if candidate.is_empty() || candidate.len() > 45 {
+        return None;
+    }
+    candidate
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| ip.to_string())
 }
 
 #[cfg(test)]
@@ -380,36 +396,73 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_for_is_only_honoured_when_proxy_is_trusted() {
+    fn real_ip_header_wins_because_nginx_overwrites_it() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "203.0.113.9, 10.0.0.1".parse().unwrap());
+        // 攻击者带的 XFF 在最左边；nginx 追加真实地址；X-Real-IP 是 nginx 覆盖写的。
+        headers.insert("x-forwarded-for", "1.2.3.4, 203.0.113.9".parse().unwrap());
+        headers.insert("x-real-ip", "203.0.113.9".parse().unwrap());
         let connect = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5000)));
 
         assert_eq!(
             client_ip(&headers, true, Some(&connect)).as_deref(),
             Some("203.0.113.9"),
-            "信任代理时取最左边的原始客户端地址"
-        );
-        assert_eq!(
-            client_ip(&headers, false, Some(&connect)).as_deref(),
-            Some("127.0.0.1"),
-            "不信任代理时必须忽略这个头，否则攻击者可以随意伪造"
+            "X-Real-IP 是唯一不可伪造的来源，必须优先"
         );
     }
 
     #[test]
-    fn forwarded_for_rejects_garbage_and_overlong_values() {
+    fn forwarded_for_falls_back_to_the_last_hop_not_the_first() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
-        assert_eq!(client_ip(&headers, true, None), None);
+        // 左边是客户端自己写的，右边是 nginx 追加的真实来源。
+        headers.insert("x-forwarded-for", "6.6.6.6, 198.51.100.7".parse().unwrap());
+        let connect = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5000)));
 
-        let mut long = HeaderMap::new();
-        let victim = "1".repeat(46);
-        long.insert("x-forwarded-for", victim.parse().unwrap());
         assert_eq!(
-            client_ip(&long, true, None),
+            client_ip(&headers, true, Some(&connect)).as_deref(),
+            Some("198.51.100.7"),
+            "取最左边等于把限速键交给攻击者（每次换一个伪造值就能绕过锁定）"
+        );
+        assert_eq!(
+            client_ip(&headers, false, Some(&connect)).as_deref(),
+            Some("127.0.0.1"),
+            "不信任代理时必须忽略代理头，直接用 socket 对端"
+        );
+    }
+
+    #[test]
+    fn spoofed_garbage_is_not_an_ip() {
+        // 这些值字符集合法（十六进制字母），但都不是 IP；早先的字符集检查会放行。
+        for junk in ["abc", "deadbeef", "not-an-ip", "1.2.3", ""] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-real-ip", junk.parse().unwrap());
+            headers.insert("x-forwarded-for", junk.parse().unwrap());
+            assert_eq!(
+                client_ip(&headers, true, None),
+                None,
+                "{junk} 不该被当成客户端 IP"
+            );
+        }
+    }
+
+    #[test]
+    fn overlong_values_are_dropped_before_they_reach_the_audit_table() {
+        let mut headers = HeaderMap::new();
+        let victim = "1".repeat(46);
+        headers.insert("x-forwarded-for", victim.parse().unwrap());
+        assert_eq!(
+            client_ip(&headers, true, None),
             None,
             "超过 45 字符的值会撑爆 audit_logs.ip"
+        );
+    }
+
+    #[test]
+    fn ipv6_is_normalised() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "2001:0db8::0001".parse().unwrap());
+        assert_eq!(
+            client_ip(&headers, true, None).as_deref(),
+            Some("2001:db8::1")
         );
     }
 }

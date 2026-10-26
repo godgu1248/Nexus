@@ -97,17 +97,23 @@ pub async fn change_role(
     }
 
     // 最后一个 active admin 不许降级：降完就没人能进管理区了。
+    //
+    // 检查必须与 UPDATE 在**同一个事务**里、并且先锁住 admin 行。事务外读计数
+    // 是典型的先查后改：两个管理员同时把对方降级，两边都读到 2、都通过检查、
+    // 都提交，结果一个 active admin 都不剩——而且界面没有任何办法恢复。
+    // `lock_active_admins` 让后到的事务在前一笔提交后重新读，于是它看到 1 并被拒绝。
+    let mut tx = pool.begin().await?;
     if target.role == Role::Admin
         && target.status == UserStatus::Active
         && role != Role::Admin
-        && auth_model::count_active_admins(pool).await? <= 1
+        && auth_model::lock_active_admins(&mut tx).await? <= 1
     {
+        tx.rollback().await?;
         return Err(AppError::unprocessable(
             "这是最后一个可用的管理员，不能降级——否则没人能再进管理区",
         ));
     }
 
-    let mut tx = pool.begin().await?;
     let changed = auth_model::set_role(&mut tx, target_id, role).await?;
     if !changed {
         tx.rollback().await?;
@@ -152,17 +158,19 @@ pub async fn change_status(
         return Ok(());
     }
 
+    // 同 change_role：计数与写入必须在同一事务、并且先锁住 admin 行。
+    let mut tx = pool.begin().await?;
     if target.role == Role::Admin
         && target.status == UserStatus::Active
         && status != UserStatus::Active
-        && auth_model::count_active_admins(pool).await? <= 1
+        && auth_model::lock_active_admins(&mut tx).await? <= 1
     {
+        tx.rollback().await?;
         return Err(AppError::unprocessable(
             "这是最后一个可用的管理员，不能停用——否则没人能再进管理区",
         ));
     }
 
-    let mut tx = pool.begin().await?;
     let changed = auth_model::set_status(&mut tx, target_id, status).await?;
     if !changed {
         tx.rollback().await?;
@@ -198,16 +206,18 @@ pub async fn delete_user(
     if target.status == UserStatus::Deleted {
         return Ok(());
     }
+    // 同上：软删最后一个管理员同样会把人锁在外面。
+    let mut tx = pool.begin().await?;
     if target.role == Role::Admin
         && target.status == UserStatus::Active
-        && auth_model::count_active_admins(pool).await? <= 1
+        && auth_model::lock_active_admins(&mut tx).await? <= 1
     {
+        tx.rollback().await?;
         return Err(AppError::unprocessable(
             "这是最后一个可用的管理员，不能删除",
         ));
     }
 
-    let mut tx = pool.begin().await?;
     let changed = auth_model::soft_delete(&mut tx, target_id).await?;
     if !changed {
         tx.rollback().await?;
