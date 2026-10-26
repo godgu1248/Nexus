@@ -34,9 +34,9 @@ src/
   public/        前厅（评论、点赞、投稿、待审队列）
   admin/         管理台（成员、申请、投稿、审计查看）
   notice/        公告（发布、受众、导航红点、逐人确认）
-  media/         图片上传（内容寻址、magic bytes 校验、4 MiB 上限）
+  media/         图片与 Word 上传（内容寻址、magic bytes 校验；图片 4 MiB / 文档 8 MiB）
 templates/       Askama 模板（layout + 各模块子目录）
-migrations/      0001–0012，编译期嵌入二进制
+migrations/      0001–0017，编译期嵌入二进制
 static/          app.css / app.js / editor.js / htmx.min.js（反向代理直出）
 tests/           集成测试（走线上路由装配，需 TEST_DATABASE_URL）
 deploy/          systemd unit、nginx.conf（Caddyfile 为早期方案，保留作参考）
@@ -68,7 +68,7 @@ https://flowrun.cloud/downloads/MIRROR.txt
 ```
 
 镜像里的字节与 Release 资产完全一致（`sha256sum -c` 能过），目录说明见 `MIRROR.txt`。
-当前镜像放的是 **v0.1.8**（同一目录只留最新一版，历史版本请到 Release 页取）。
+当前镜像放的是 **v0.1.9**（同一目录只留最新一版，历史版本请到 Release 页取）。
 另外 `https://flowrun.cloud/downloads/local-build/` 还放了维护者本机用 `package.ps1` 打的那一套：
 源码相同、链接器不同，所以 Linux 二进制字节不一样，带自己的 `SHA256SUMS.txt` 与 `NOTE.txt`。
 要「与 Release 逐字节一致」用上面那组，要「维护者本机验证过的那份」用子目录。
@@ -142,8 +142,9 @@ cargo fmt --check
 | M7 | 管理：成员审批、角色/状态、投稿审核、审计查看 | ✅ |
 | M8 | 富文本正文与图片上传（档案/论坛/公告）、外观三项设置 | ✅ |
 | M9 | 公告受众（全体/团队）、来宾入口收敛 | ✅ |
+| M10 | Word 文档：上传 .docx、解析成受控 HTML、站内查看器、粘贴清洗 | ✅ |
 
-每个里程碑的契约、验收条款与实测记录都在 `DESIGN.md`（§17/§18/§20/§21/§22/§23/§24/§25）。
+每个里程碑的契约、验收条款与实测记录都在 `DESIGN.md`（§17/§18/§20/§21/§22/§23/§24/§25/§41）。
 
 ## 功能一览（面向使用者）
 
@@ -154,6 +155,7 @@ cargo fmt --check
 | 论坛 `/forum` | 分区 → 议题 → 回复；定论、归档、软删；**分区按热度排序**（未删议题 + 未删回复，不再手填排序值） |
 | 档案 `/kb` | 树形文档、草稿/发布、搜索；**归档热度排序**（置顶 → 浏览+点赞 → 更新时间），管理员可置顶多条并定顺序 |
 | 任务 `/tasks` | 指派、状态流转、从议题生成 |
+| Word 文档 | 编辑器可直接上传 `.docx`，正文与图片解析进站内；文档页内嵌只读查看器（`/doc/{sha}`），复制 Word 内容粘贴时自动去私有标记 |
 | 小组 `/groups` | 管理员建组、加人；小组可见性内容 |
 | 前厅 `/lobby` | 对外只读展示 + 外人评论点赞投稿 |
 | 设置 `/settings` | 强调色 / 背板 / 字体，三项都与账号绑定 |

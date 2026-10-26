@@ -1,6 +1,6 @@
 [package]
 name = "nexus"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 rust-version = "1.99"
 publish = false
@@ -61,6 +61,12 @@ sha2 = "=0.10.9"
 # 只为表达 session 过期时长：tower-sessions 的 Expiry::OnInactivity 收的是 time::Duration，
 # 而 time 没有被重新导出。版本与 lock 里已有的传递依赖一致，不引入新包。
 time = "=0.3.55"
+# Word（.docx）导入：docx 就是一个 zip，里面是 OOXML。只用 deflate 解压，
+# 刻意关掉默认 feature——bzip2/zstd/aes 会拖进 C 依赖，而 2C2G 的静态二进制不该为
+# "能解压一条 docx" 多背 zstd 的编译时间。
+zip = { version = "=9.1.2", default-features = false, features = ["deflate"] }
+# 解析 OOXML：只要流式事件读，不要 serde（省掉编译时间）。
+quick-xml = "=0.42.0"
 
 [dev-dependencies]
 http-body-util = "=0.1.5"

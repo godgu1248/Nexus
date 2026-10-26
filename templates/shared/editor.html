@@ -3,7 +3,7 @@
    换成 contenteditable，并在提交前把 innerHTML 写进隐藏字段 `<name>_html`。
    服务端优先用富文本，拿不到就回退到纯文本 textarea 的值。 #}
 {% macro render(id, plain_name, html_name, value, rows, maxlength) %}
-<div class="editor" data-editor data-upload-url="/media/upload">
+<div class="editor" data-editor data-upload-url="/media/upload" data-docx-url="/media/docx">
   <div class="editor__toolbar" role="toolbar" aria-label="排版工具栏">
     <button type="button" class="editor__btn" data-cmd="bold" title="加粗"><strong>B</strong></button>
     <button type="button" class="editor__btn" data-cmd="italic" title="斜体"><em>I</em></button>
@@ -21,6 +21,7 @@
     <span class="editor__sep" aria-hidden="true"></span>
     <button type="button" class="editor__btn" data-cmd="createLink" title="插入链接">链接</button>
     <button type="button" class="editor__btn editor__btn--image" data-upload title="插入图片">图片</button>
+    <button type="button" class="editor__btn editor__btn--docx" data-docx title="上传 Word 文档（.docx）">Word</button>
     <button type="button" class="editor__btn" data-cmd="removeFormat" title="清除格式">清除</button>
     <button type="button" class="editor__btn" data-cmd="undo" title="撤销">↶</button>
     <button type="button" class="editor__btn" data-cmd="redo" title="重做">↷</button>
@@ -29,6 +30,7 @@
   <textarea class="editor__fallback" id="{{ id }}" name="{{ plain_name }}" data-fallback rows="{{ rows }}"{% if maxlength > 0 %} maxlength="{{ maxlength }}"{% endif %}>{{ value }}</textarea>
   <input type="hidden" name="{{ html_name }}" data-html value="">
   <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file hidden>
-  <p class="editor__hint">支持图片（PNG / JPEG / WebP / GIF，单张 ≤ 4 MB）。也可以直接把截图粘贴进来。</p>
+  <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" data-docx-file hidden>
+  <p class="editor__hint">支持图片（PNG / JPEG / WebP / GIF，单张 ≤ 4 MB）。也可以直接把截图或 Word 里的内容粘贴进来；上传 .docx（≤ 8 MB）会内嵌成可翻页的文档。</p>
 </div>
 {% endmacro %}

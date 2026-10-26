@@ -6,6 +6,8 @@
 //!    列读回值会整体漂 8 小时，而且不报错——这是最贵的一类 bug，因为它静默。
 //! 2. **迁移失败即拒绝启动**。表结构没对齐就对外服务，等于把 500 留给用户。
 
+// 迁移由 sqlx::migrate! 在编译期嵌入：新增 .sql 之后必须让本 crate 重新编译，
+// 否则跑的是上一次嵌进去的那一批（这个坑在加 0017 时踩过一次）。
 use crate::config::Config;
 use crate::error::AppError;
 use sqlx::Executor;

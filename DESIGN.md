@@ -3926,3 +3926,147 @@ UNIQUE KEY uk_join_pending (pending_user_id)
 第三个被丢弃、`$out` 收下了字符串 `'SHA256SUMS.txt'`，于是文件写到了当前目录，
 后面 `Get-Content $sumsOut` 报 `Cannot find path ...\sums-top.txt`——
 错误信息指向"文件没找到"，真因是"参数传错"。函数调用一律把路径先拼成一个字符串再传。
+
+## 41. Word 文档：粘贴、上传与查看器
+
+### 41.1 需求
+
+owner：
+
+> 优化word文档的复制，并且提供直接上传word的选项，并且内置网页word查看器，优化体验
+
+三件事，三条不同的技术路径：
+
+| 需求 | 路径 |
+| --- | --- |
+| 从 Word 复制到编辑器保留格式 | 浏览器已经给了 HTML 剪贴板，要做的只是**清洗**（去掉 `mso-*`、`<o:p>`、条件注释）并让服务端再净化一遍 |
+| 直接上传 .docx | 服务端解析 OOXML：`zip` 解包 + `quick-xml` 读 XML，映射成受控 HTML |
+| 页面内嵌查看器 | `GET /doc/{sha}` 渲染**上传时就已净化入库存下的** HTML，不重新解析 |
+
+### 41.2 依赖
+
+```toml
+zip = { version = "=9.1.2", default-features = false, features = ["deflate"] }
+quick-xml = "=0.42.0"
+```
+
+`zip` 刻意关掉默认 feature：默认带 bzip2/zstd，会把 C 库拖进交叉编译（本项目走 musl 静态链接，多一个 C 依赖就多一份目标机风险）。.docx 只用 deflate。
+
+### 41.3 解析器（`src/shared/docx.rs`）
+
+`pub fn parse_docx(bytes: &[u8]) -> Result<ParsedDocx, AppError>`，`ParsedDocx { title, html, text, images, notes }`。
+
+限制先于解析，全部在打开 zip 之前或读条目之前判：
+
+| 常量 | 值 | 为什么 |
+| --- | --- | --- |
+| `MAX_DOCX_BYTES` | 8 MiB | 与图片上限同量级，2C2G 上单次解析可接受 |
+| `MAX_DOCUMENT_XML` | 32 MiB | 解压炸弹：压缩比 1000:1 的 docx 能有几百 MB XML |
+| `MAX_TEXT_CHARS` | 60 000 | 与档案正文上限对齐 |
+| `MAX_HTML_CHARS` | 200 000 | 与净化器的 HTML 上限一致 |
+| `MAX_IMAGES` | 32 | 一份文档里几十张图是常态，上百张说明该走网盘 |
+| `MAX_IMAGE_BYTES` | 8 MiB/张 | 复用图片上传的能力边界 |
+
+映射表（Word → HTML）：`w:p` → `<p>`（`pStyle` 为 `Heading1/2/3` 时出 `<h2>/<h3>`）、`w:b/w:i/w:u` → `strong/em/u`、`w:numPr` + `numbering.xml` → `ul`/`ol`、`w:tbl` → `table/tr/td`（`gridSpan`/`vMerge` 折算成 `colspan`/`rowspan`）、`w:drawing` → 图片占位 `{{img:N}}`。
+
+图片**不内联 base64**：解析阶段只把 `word/media/*` 的字节收集进 `images`，HTML 里留 `{{img:N}}`，由 `media::service::save_docx` 逐张落盘（内容寻址、去重、审计都复用图片那条路），再替换成 `<img src="{UPLOAD_BASE_URL}/{sha}.{ext}">`。这样同一张截图在十个文档里只存一份。
+
+输出最后一定过 `richtext::sanitize`——解析器的输出不被信任，它是"生成 HTML 的另一个来源"，和用户粘贴没有区别。
+
+### 41.4 净化器要放开的两处
+
+1. **表格标签**：`table/thead/tbody/tfoot/tr/th/td` 进白名单；`colspan/rowspan` 只收 `2..=64`（`SPAN_MAX`）——`rowspan="999999"` 会让浏览器排版跑飞。
+2. **`iframe`**：只允许 `src` 形如 `/doc/{64 位十六进制}`，其余一律整段丢弃；属性由净化器**重写**成 `class="doc-frame" sandbox="" loading="lazy" title="Word 文档"`，夹带的 `sandbox="allow-scripts"`、`onload` 都不落地。`sandbox=""` 是最严的一档：不允许脚本、不允许同源、不允许表单。
+
+放开 iframe 是这次唯一放宽安全边界的地方，所以有专门的测试盯：`https://evil.example/x`、`//evil.example/x`、`/doc/short`、`srcdoc="<script>…"` 四种都必须整段消失，页面里不剩可见的 `</iframe>`。
+
+### 41.5 粘贴清洗（`static/editor.js`）
+
+浏览器粘贴时 `text/html` 里带的是 Word 的全套私有标记（`<o:p>`、`mso-*` 样式、`<!--[if gte mso 9]>` 条件注释、`<style>` 块）。编辑器里做两级：
+
+1. 前端：走一遍 DOM 白名单（与后端表一致），丢 `style`/`class`/`o:*`/条件注释，保留 `b/i/u/ul/ol/li/table/tr/td/a/img`；
+2. 后端：`richtext::sanitize` 再扫一遍。**前端清洗是为了体验（不留垃圾标签），后端净化才是安全边界。**
+
+粘贴图片走既有的上传链路（`data:` 转 FormData → `/media/upload`），不把 base64 直接塞进 HTML。
+
+### 41.6 媒体层复用与一个列宽事故
+
+`media` 表加三列：`kind`（`image`/`docx`）、`title`、`html`（净化后的正文）。没有另建 `media_docx` 表：内容寻址、去重、审计、限速都是现成的，分表只会让"上传"有两套代码。
+
+上传 .docx 的第一版在测试里 500，真实错误是：
+
+```
+1406 (22001): Data too long for column 'mime' at row 1
+```
+
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document` 有 **72** 个字符，而 `0012` 建表时 `mime VARCHAR(64)` 是按 `image/png` 这类图片 MIME 设计的。`0017_media_mime_len.sql` 放宽到 `VARCHAR(128)`（留一倍余量给 `; charset=…` 之类的参数）。**这是"列宽按旧需求定的"最典型的一次代价**：数据库层报的是列宽，用户看到的是"Word 上传一直失败"。
+
+### 41.7 编译期迁移嵌入的坑
+
+`sqlx::migrate!("./migrations")` 是**编译期**宏：新加的 `.sql` 不会自动让 crate 重编，于是本地调试时跑的还是上一次嵌进去的那一批——`0017` 明明写好了，`_sqlx_migrations` 里没有 17，报错完全一样，人会以为是 SQL 没生效。
+
+处置：加迁移后强制重编（改一行 `src/db.rs` 的注释即可触发），CI 与 `cargo clean` 场景不受影响。这条写进了 `src/db.rs` 的注释，避免下一个人再花十分钟。
+
+### 41.8 quick-xml / zip 9 的 API 与 Word 的写法
+
+- `QName`/`LocalName` 实现的是 `AsRef<str>`，`local_name` 收 `&str` 返 `&str`（不是 `&[u8]`），元素名一律写 `"p"` 而不是 `b"p"`；
+- `BytesText` 没有 `unescape()`，用 `xml10_content()`；
+- `Attribute::unescape_value()` 返回 `XmlResult<Cow<str>>`；
+- zip 9 的 `ZipFile::name()` 返回 `Result<Cow<str>, ZipError>`；
+- **Word 把 `pStyle`/`numId` 写成自闭合的 `<w:pStyle w:val="…"/>`**，只在 `Start` 分支处理会一个都读不到——标题全变普通段落、列表全变无序。两处都必须在 `empty()` 分支里补。
+
+另修掉一个既有缺陷：`push_text` 原来是一串 `replace` 逐级解码实体，`&amp;lt;` 会被解两次变成真尖括号（等于绕过转义）。改成单趟 `decode_entities`（只认白名单实体），并加测试 `already_escaped_text_is_not_escaped_twice`。
+
+### 41.9 验收
+
+`cargo test` **292 passed / 0 failed**：lib 193 + admin 12 + auth 6 + **docx 4** + forum 11 + group 8 + kb 12 + notice 5 + payload 4 + public 12 + ratelimit 4 + richtext 3 + settings 7 + task 10 + utc 1（lib 里包含新增的 `human_size` 三档与"静态资源只用一把缓存钥匙"两条）。
+
+`tests/docx_flow.rs` 四条：上传后查看器渲染出正文、非 docx 回 422、文本里的 `&lt;script&gt;` 只作为文字显示（不执行、不丢字符）、未知 sha 回 404。`cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 均为 0。
+
+### 41.10 已知取舍
+
+- **粘贴路径只能人工验**：剪贴板里的 `text/html` 无法在集成测试里伪造出"真实 Word 的输出"，所以测试只覆盖上传路径；前端清洗的正确性靠"后端一定会再净化"兜底。
+- 复杂合并单元格（嵌套表格里的 `vMerge` 链）只做单层折算，遇到 Word 的横向合并 + 纵向合并交叉时会退化成普通单元格，不报错但排版会变。
+- 图片不转码、不缩略：与 §32 同一条债务，`img width` 只做整数校验。
+- 文档没有独立权限模型，沿用 `media`：任何登录用户都能按 sha 访问 `/doc/{sha}`（§33.5 已记，owner 已明确"这些问题不要紧"）。
+
+### 41.11 上线过程里暴露的四个坑
+
+这一轮的代码本身在本地就绿了，但"能不能真的上线"是另一回事。四个坑都记在这里，因为每一个都能让下一个人浪费一小时。
+
+**1. Windows 命令行 32767 字符上限：`ENAMETOOLONG` 从不提长度**
+
+加了 `zip` / `quick-xml` 之后，链接期要传的对象文件从 ~150 涨到 **195** 个，路径全是绝对路径。最终报错是：
+
+```
+= note: zig wrapper failed: spawnSync C:\zig\zig.exe ENAMETOOLONG
+...
+error(link): unable to spawn C:\zig\zig.exe: NameTooLong
+```
+
+两行都没提"参数太长"。处置分两层：
+
+- `deploy/zigcc.js` 在 argv 超过 28000 字符时自己写一个 `@response` 文件——注意 **`cc` 必须留在命令行上**（`zig @file` 会被当成子命令，报 `error: unknown command: @C:\...rsp`）；
+- `deploy/build-musl.ps1` 把 `CARGO_TARGET_DIR` 指到一个短路径（默认 `C:\nxtarget`），把 34028 字符压到 31301；构建完自动把产物复制回 `target\<triple>\release\nexus`，其他脚本不用改。
+
+**2. `| Select-Object -First 4` 会掐断前面还在跑的原生命令**
+
+部署脚本输出太长，我顺手加了 `Select-Object -First 4` 看前面几行。PowerShell 在拿到足够行数后会**停止上游管道**，`curl` / `ssh` 被中途杀掉——上传完成了，但 `install`、`systemctl restart` 全没执行。于是"部署成功"的日志看起来正常，服务器上跑的还是旧二进制。
+
+发现方式：部署后单独 `sha256sum /opt/nexus/nexus`，哈希还是上一版的。**规则：跑部署这类原生命令时把输出重定向到文件再 `Get-Content -Tail`，不要在管道里截断。**
+
+**3. 无 BOM 的 `.ps1` 里写中文注释，会吞掉下一行**
+
+`ops/verify-docx.ps1` 里我加了一段中文注释，下一行的 `$jar = Join-Path ...` 被吃掉了，`$jar` 变成空串，`-b $jar -c $jar` 退化成 `-b -c`（curl 把 `-c` 当成文件名），于是 GET 拿到会话但 POST 不带 cookie → **403**。
+
+表象是"登录 403"，真因是"注释把变量赋值吃了"。这个坑在项目里出现过至少五次，规则只有一条：**`.ps1` 一律纯 ASCII**（写完用 `($t.ToCharArray() | Where-Object { [int]$_ -gt 127 }).Count` 自查，必须是 0）。
+
+**4. 两处界面缺陷（顺手修的）**
+
+- 文档查看器把体积写成 `0 KB`：`human_size` 原来只有 MB/KB 两档，`bytes / 1024` 对几百字节的文件是 0。小于 1 KB 直接报字节数。
+- 静态资源版本号漂移：`app.css` 与 `editor.js` 是 `20261027`，`app.js` 还是 `20261024`。nginx 对 `/static/*` 发一年 immutable，**改 app.js 的人会以为改坏了**。现在三处统一，并加了一条测试 `layout_uses_one_cache_key_for_every_asset_it_references` 钉死"一次构建只用一把钥匙"。
+
+### 41.12 验收记录（线上）
+
+`ops/verify-docx.ps1` **13/13 PASS**（连跑两次结果一致）：登录页有 CSRF、登录 303、上传返回 `/doc/<64 hex>`、查看器含标题文字、加粗渲染成 `<b>`、普通 run 保留、列表渲染成 `<ul>`、容器带 `word-view`、未知 sha 404、非 docx 422。`ops/smoke.ps1` **19/19**。
+

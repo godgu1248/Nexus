@@ -33,6 +33,7 @@
     var hidden = root.querySelector("[data-html]");
     var fallback = root.querySelector("[data-fallback]");
     var fileInput = root.querySelector("[data-file]");
+    var docxInput = root.querySelector("[data-docx-file]");
     var form = root.closest("form");
     if (!surface || !hidden || !fallback || !form) return;
 
@@ -108,6 +109,12 @@
       if (event.target.closest("[data-upload]")) {
         event.preventDefault();
         if (fileInput) fileInput.click();
+        return;
+      }
+
+      if (event.target.closest("[data-docx]")) {
+        event.preventDefault();
+        if (docxInput) docxInput.click();
       }
     });
 
@@ -150,9 +157,175 @@
       });
     }
 
-    // 粘贴：带图片文件的走上传；其余一律当纯文本，避免把外部页面的 style/字体一起粘进来。
+    // 插入 Word 文档：服务端把 .docx 解析成 HTML 存进媒体库，这里只放一个受限的 iframe。
+    // 编辑区里存的是 <figure class="doc-embed"><iframe src="/doc/<sha>">…，不是正文的副本——
+    // 文档改了要重新上传，换来的是"编辑器里的 HTML 永远比正文小一个量级"。
+    function insertDocEmbed(url, title) {
+      var figure = make("figure", "doc-embed");
+      var frame = make("iframe");
+      frame.setAttribute("src", url);
+      frame.setAttribute("sandbox", "");
+      frame.setAttribute("loading", "lazy");
+      frame.setAttribute("title", title || "Word 文档");
+      figure.appendChild(frame);
+      if (title) {
+        var caption = make("figcaption");
+        caption.textContent = title;
+        figure.appendChild(caption);
+      }
+      insertNode(figure);
+    }
+
+    if (docxInput) {
+      docxInput.addEventListener("change", function () {
+        var file = docxInput.files && docxInput.files[0];
+        docxInput.value = "";
+        if (!file) return;
+        if (file.size > 8 * 1024 * 1024) {
+          window.alert("Word 文档不能超过 8 MB。");
+          return;
+        }
+        var body = new FormData();
+        body.append("file", file);
+        var token = csrfToken();
+        fetch(root.getAttribute("data-docx-url") || "/media/docx", {
+          method: "POST",
+          body: body,
+          credentials: "same-origin",
+          headers: token ? { "X-CSRF-Token": token } : {},
+        })
+          .then(function (response) {
+            if (!response.ok) {
+              return response.text().then(function (text) {
+                throw new Error(text || "上传失败（" + response.status + "）");
+              });
+            }
+            return response.json();
+          })
+          .then(function (data) {
+            if (!data || !data.url) throw new Error("上传没有返回地址");
+            insertDocEmbed(data.url, data.title);
+          })
+          .catch(function (err) {
+            window.alert("Word 上传失败：" + err.message);
+          });
+      });
+    }
+
+    // 从 Word / 网页复制过来的 HTML：先按白名单重建成结构再插入。
+    //
+    // 为什么不能直接 insertHTML：Word 会带进 mso-* 样式、<o:p>、整页 <style> 与字体声明，
+    // 粘一次后面板就变成"网页中毒"；而一律当纯文本又丢掉了加粗、列表、表格——
+    // 后者正是 owner 这次要的"复制保留格式"。所以走中间那条：结构留下，样式全扔。
+    //
+    // 注意这只是体验层的清洗，安全边界仍在服务端 richtext::sanitize（它不信任这里的输出）。
+    var KEEP = {
+      p: 1, br: 1, strong: 1, b: 1, em: 1, i: 1, u: 1, s: 1, del: 1,
+      ul: 1, ol: 1, li: 1, h2: 1, h3: 1, blockquote: 1, pre: 1, code: 1,
+      a: 1, hr: 1, div: 1, span: 1, table: 1, thead: 1, tbody: 1, tfoot: 1,
+      tr: 1, th: 1, td: 1, img: 1,
+    };
+    var DROP = {
+      script: 1, style: 1, head: 1, title: 1, meta: 1, link: 1, iframe: 1, object: 1,
+      embed: 1, svg: 1, math: 1, form: 1, input: 1, textarea: 1, button: 1,
+      select: 1, option: 1, template: 1, noscript: 1,
+    };
+
+    function escapeText(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function escapeAttr(value) {
+      return escapeText(value).replace(/"/g, "&quot;");
+    }
+
+    function safeHref(href) {
+      if (!href) return false;
+      if (/^\/(?!\/)/.test(href)) return true; // 站内单斜杠
+      if (/^https?:\/\//i.test(href)) return true;
+      if (/^mailto:/i.test(href)) return true;
+      return false;
+    }
+
+    function safeImageSrc(src) {
+      if (!src) return false;
+      if (/^\/uploads\//.test(src)) return true;
+      return /^https?:\/\//i.test(src);
+    }
+
+    function spanValue(node, name) {
+      var raw = node.getAttribute(name);
+      if (!raw) return "";
+      var value = parseInt(raw, 10);
+      if (!value || value < 2 || value > 64) return "";
+      return ' ' + name + '="' + value + '"';
+    }
+
+    function cleanHtml(html) {
+      var doc;
+      try {
+        doc = new DOMParser().parseFromString(html, "text/html");
+      } catch (err) {
+        return "";
+      }
+      if (!doc || !doc.body) return "";
+
+      function walk(node, out) {
+        var kids = node.childNodes;
+        for (var i = 0; i < kids.length; i += 1) {
+          var child = kids[i];
+          if (child.nodeType === 3) {
+            out.push(escapeText(child.nodeValue));
+            continue;
+          }
+          if (child.nodeType !== 1) continue;
+          var name = child.tagName.toLowerCase();
+          if (name.indexOf(":") >= 0) {
+            walk(child, out); // <o:p> / <v:imagedata> 之类：拆掉壳，内容照走
+            continue;
+          }
+          if (DROP[name]) continue;
+          if (!KEEP[name]) {
+            walk(child, out);
+            continue;
+          }
+          var attrs = "";
+          if (name === "a") {
+            var href = (child.getAttribute("href") || "").trim();
+            if (!safeHref(href)) {
+              walk(child, out);
+              continue;
+            }
+            attrs = ' href="' + escapeAttr(href) + '"';
+          }
+          if (name === "img") {
+            var src = (child.getAttribute("src") || "").trim();
+            if (!safeImageSrc(src)) continue;
+            out.push('<img src="' + escapeAttr(src) + '" alt="' + escapeAttr(child.getAttribute("alt") || "") + '">');
+            continue;
+          }
+          if (name === "td" || name === "th") {
+            attrs = spanValue(child, "colspan") + spanValue(child, "rowspan");
+          }
+          out.push("<" + name + attrs + ">");
+          if (name === "br" || name === "hr") continue;
+          walk(child, out);
+          out.push("</" + name + ">");
+        }
+      }
+
+      var out = [];
+      walk(doc.body, out);
+      return out.join("");
+    }
+
+    // 粘贴：带图片文件的走上传；带 HTML 的走白名单清洗；否则纯文本。
     surface.addEventListener("paste", function (event) {
-      var items = event.clipboardData && event.clipboardData.items;
+      var clipboard = event.clipboardData;
+      var items = clipboard && clipboard.items;
       if (items) {
         for (var i = 0; i < items.length; i += 1) {
           if (items[i].type && items[i].type.indexOf("image/") === 0) {
@@ -168,7 +341,18 @@
           }
         }
       }
-      var text = event.clipboardData ? event.clipboardData.getData("text/plain") : "";
+
+      var html = clipboard ? clipboard.getData("text/html") : "";
+      if (html && html.length <= 200000) {
+        var cleaned = cleanHtml(html);
+        if (cleaned.trim()) {
+          event.preventDefault();
+          exec("insertHTML", cleaned);
+          return;
+        }
+      }
+
+      var text = clipboard ? clipboard.getData("text/plain") : "";
       if (text) {
         event.preventDefault();
         exec("insertText", text);

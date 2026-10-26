@@ -1,4 +1,4 @@
-//! 图片元数据（文件本身在磁盘上，库里只记 sha256 与来源）。
+//! 图片 / Word 文档的元数据（文件本身在磁盘上，库里只记 sha256 与来源）。
 
 use chrono::{DateTime, Utc};
 use sqlx::mysql::MySqlRow;
@@ -8,8 +8,12 @@ use crate::error::AppError;
 
 /// 一条上传记录。
 ///
-/// 文件按 `sha256` 内容寻址：同一张图重复上传只落一份，URL 也不可枚举
-/// （不能靠自增 id 猜别人的图）。
+/// 文件按 `sha256` 内容寻址：同一个文件重复上传只落一份，URL 也不可枚举
+/// （不能靠自增 id 猜别人的文件）。
+///
+/// `kind` 区分图片与 Word 文档；`title` / `html` 只对文档有意义——`html` 存的是
+/// **解析并净化过**的正文，查看器直接用，不再每次重新解析（解析器将来改行为也不会
+/// 让历史文档的渲染结果跟着漂移）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Media {
     pub id: u64,
@@ -17,6 +21,9 @@ pub struct Media {
     pub ext: String,
     pub mime: String,
     pub bytes: u32,
+    pub kind: String,
+    pub title: Option<String>,
+    pub html: Option<String>,
     pub uploader_id: u64,
     pub created_at: DateTime<Utc>,
 }
@@ -27,13 +34,16 @@ pub struct NewMedia<'a> {
     pub ext: &'a str,
     pub mime: &'a str,
     pub bytes: u32,
+    pub kind: &'a str,
+    pub title: Option<&'a str>,
+    pub html: Option<&'a str>,
     pub uploader_id: u64,
 }
 
-/// 按内容哈希查已有的图。重复上传靠它直接返回老记录。
+/// 按内容哈希查已有的文件。重复上传靠它直接返回老记录。
 pub async fn find_by_sha(pool: &MySqlPool, sha256: &str) -> Result<Option<Media>, AppError> {
     let row = sqlx::query(
-        "SELECT id, sha256, ext, mime, bytes, uploader_id, created_at \
+        "SELECT id, sha256, ext, mime, bytes, kind, title, html, uploader_id, created_at \
          FROM media WHERE sha256 = ?",
     )
     .bind(sha256)
@@ -51,12 +61,16 @@ pub async fn insert_media(
     // 用普通 INSERT + 精确识别 1062，而不是 INSERT IGNORE：
     // IGNORE 会把外键错误也吞成"重复"，最后表现为"上传成功了但查不到"。
     let result = sqlx::query(
-        "INSERT INTO media (sha256, ext, mime, bytes, uploader_id) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO media (sha256, ext, mime, bytes, kind, title, html, uploader_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(input.sha256)
     .bind(input.ext)
     .bind(input.mime)
     .bind(input.bytes)
+    .bind(input.kind)
+    .bind(input.title)
+    .bind(input.html)
     .bind(input.uploader_id)
     .execute(&mut **tx)
     .await;
@@ -88,6 +102,9 @@ fn row_to_media(row: &MySqlRow) -> Result<Media, AppError> {
         ext: row.try_get("ext")?,
         mime: row.try_get("mime")?,
         bytes: row.try_get("bytes")?,
+        kind: row.try_get("kind")?,
+        title: row.try_get("title")?,
+        html: row.try_get("html")?,
         uploader_id: row.try_get("uploader_id")?,
         created_at: row.try_get("created_at")?,
     })

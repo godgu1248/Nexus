@@ -1270,3 +1270,57 @@ body.font-mono .card p { max-width: 68ch; }
 .editor:not(.editor--ready) .editor__toolbar,
 .editor:not(.editor--ready) .editor__surface,
 .editor:not(.editor--ready) .editor__hint { display: none; }
+
+/* ── 富文本里的表格与内嵌文档 ─────────────────────────────────────────
+   Word 复制过来的表格原本靠内联 style 画线，那些 style 在清洗时被丢掉了；
+   如果这里不给边框，粘过来就是一片没有分隔线的文字墙。 */
+.rich-text table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-4) 0;
+  font-size: 0.95rem;
+}
+
+.rich-text th,
+.rich-text td {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.rich-text th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.rich-text figure {
+  margin: var(--space-4) 0;
+}
+
+.rich-text figcaption {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 0.875rem;
+}
+
+/* 内嵌 Word：iframe 的 sandbox 是空的（等于最严格），所以查看器页里不能有脚本，
+   翻页/缩放全部靠服务端渲染的静态 HTML + 浏览器原生滚动。 */
+.doc-embed .doc-frame {
+  display: block;
+  width: 100%;
+  height: 640px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+@media (max-width: 640px) {
+  .doc-embed .doc-frame {
+    height: 420px;
+  }
+  .rich-text th,
+  .rich-text td {
+    padding: 6px 8px;
+  }
+}

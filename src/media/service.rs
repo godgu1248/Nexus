@@ -15,7 +15,7 @@ use crate::error::AppError;
 use crate::shared::audit::action;
 use crate::shared::audit::{self, AuditCtx};
 
-use super::model::{self, NewMedia};
+use super::model;
 
 /// 单张图片上限。与 nginx 的 `client_max_body_size`（8m）留出余量：
 /// 应用层先拒，用户看到的是"图片太大"，而不是网关的 413 白页。
@@ -123,9 +123,12 @@ pub async fn save_image(
         ext: kind.ext(),
         mime: kind.mime(),
         bytes: data.len() as u32,
+        kind: "image",
+        title: None,
+        html: None,
         uploader_id: actor.id,
     };
-    let (media_id, inserted) = model::insert_media(&mut tx, NewMedia(uploader)).await?;
+    let (media_id, inserted) = model::insert_media(&mut tx, uploader).await?;
 
     if inserted {
         audit::record(
@@ -187,11 +190,134 @@ fn human_size(bytes: usize) -> String {
     }
 }
 
-// NewMedia 是带生命周期参数的结构体，这里只需要它的字段值，
-// 用一个零成本包装避免在 service 里再写一遍字段名。
-#[allow(non_snake_case)]
-fn NewMedia(input: NewMedia<'_>) -> NewMedia<'_> {
-    input
+/// 一个已经落盘的 Word 文档。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredDoc {
+    /// 查看器地址（`/doc/{sha256}`）。
+    pub viewer_url: String,
+    pub sha256: String,
+    pub title: String,
+    pub bytes: u32,
+    /// 内容已存在（没有重新解析，也没有新增 media 行）。
+    pub reused: bool,
+    /// 解析时降级或忽略的东西，给用户看的一句话提示（可为空）。
+    pub notes: Vec<String>,
+}
+
+/// 存 Word 文档：解析 → 净化 → 落盘 → 入库 → 记审计。
+///
+/// 解析失败一律 422：用户上传的是他手上那份文件，说"解析不了"比说"服务器错误"有用。
+/// 正文里可能引用的图片（`{{img:N}}` 占位）本轮**不**导入——嵌入 word 查看器的场景里
+/// 图片占多数，导出图片会让一次上传变成几十次写盘，先记为已知取舍。
+pub async fn save_docx(
+    pool: &MySqlPool,
+    config: &Config,
+    actor: &crate::auth::policy::CurrentUser,
+    ip: Option<&str>,
+    file_name: Option<&str>,
+    data: &[u8],
+) -> Result<StoredDoc, AppError> {
+    if data.is_empty() {
+        return Err(AppError::unprocessable("没有收到文档内容"));
+    }
+    if data.len() > crate::shared::docx::MAX_DOCX_BYTES {
+        return Err(AppError::unprocessable(format!(
+            "文档不能超过 {} MB（当前 {}）",
+            crate::shared::docx::MAX_DOCX_BYTES / (1024 * 1024),
+            human_size(data.len())
+        )));
+    }
+
+    let sha = sha256_hex(data);
+    let viewer_url = format!("/doc/{sha}");
+
+    // 内容已经存在：直接复用库里那行（不重新解析，避免同一份文件两次解析出不同结果）。
+    if let Some(existing) = model::find_by_sha(pool, &sha).await?
+        && existing.kind == "docx"
+    {
+        return Ok(StoredDoc {
+            viewer_url,
+            sha256: sha,
+            title: existing.title.unwrap_or_else(|| default_title(file_name)),
+            bytes: existing.bytes,
+            reused: true,
+            notes: Vec::new(),
+        });
+    }
+
+    let parsed = crate::shared::docx::parse_docx(data)?;
+    // 标题优先级：core.xml 的 dc:title → 正文第一段（解析器已填）→ 上传文件名。
+    // 三者都可能拿到空串，所以判空要在最后一步，长度也在这里收口（列宽 200）。
+    let title = {
+        let raw = parsed.title.trim();
+        if raw.is_empty() {
+            default_title(file_name)
+        } else {
+            raw.chars().take(200).collect()
+        }
+    };
+
+    let dir = PathBuf::from(&config.upload_dir);
+    let file_name_on_disk = format!("{sha}.docx");
+    if !dir.join(&file_name_on_disk).exists() {
+        write_atomically(&dir, &file_name_on_disk, data).await?;
+    }
+
+    let mut tx = pool.begin().await?;
+    let uploader = model::NewMedia {
+        sha256: &sha,
+        ext: "docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        bytes: data.len() as u32,
+        kind: "docx",
+        title: Some(&title),
+        html: Some(&parsed.html),
+        uploader_id: actor.id,
+    };
+    let (media_id, inserted) = model::insert_media(&mut tx, uploader).await?;
+
+    if inserted {
+        audit::record(
+            &mut tx,
+            AuditCtx::new(Some(actor.id), ip),
+            action::MEDIA_UPLOAD,
+            ("media", Some(media_id)),
+            Some(serde_json::json!({
+                "sha256": sha,
+                "bytes": data.len(),
+                "kind": "docx",
+                "title_len": title.chars().count(),
+            })),
+        )
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(StoredDoc {
+        viewer_url,
+        sha256: sha,
+        title,
+        bytes: data.len() as u32,
+        reused: !inserted,
+        notes: parsed
+            .notes
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<String>>(),
+    })
+}
+
+/// 没有核心属性里的标题时，用上传的文件名去掉扩展名兜底。
+fn default_title(file_name: Option<&str>) -> String {
+    let raw = file_name.unwrap_or("未命名文档");
+    let stem = raw.rsplit_once('.').map(|(head, _)| head).unwrap_or(raw);
+    let trimmed = stem.trim();
+    if trimmed.is_empty() {
+        "未命名文档".to_owned()
+    } else {
+        trimmed.chars().take(200).collect()
+    }
 }
 
 #[cfg(test)]

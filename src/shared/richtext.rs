@@ -68,6 +68,20 @@ const ALLOWED: &[&str] = &[
     "hr",
     "div",
     "span",
+    // 表格：Word 里的表格是正文的一部分，不放开的话粘贴过来只剩一堆散落的单元格文字。
+    // 只收结构与合并单元格；`<caption>`/`<colgroup>`/`style` 这类排版细节一律不要。
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "th",
+    "td",
+    // 内嵌 Word 查看器：只允许 iframe，且 src 必须指向本站 `/doc/…`（见 render_open_tag）。
+    // 在那之前这里是"整段丢弃"，因为任意 iframe 等于允许嵌站 / 钓鱼框。
+    "figure",
+    "figcaption",
+    "iframe",
 ];
 
 /// 自闭合标签。
@@ -75,14 +89,16 @@ const VOID: &[&str] = &["br", "hr", "img"];
 
 /// 危险容器：整段丢弃（连内容一起）。
 const DANGEROUS: &[&str] = &[
-    "script", "style", "iframe", "object", "embed", "svg", "math", "template", "noscript", "form",
-    "input", "textarea", "button", "select", "option", "link", "meta", "base",
+    "script", "style", "object", "embed", "svg", "math", "template", "noscript", "form", "input",
+    "textarea", "button", "select", "option", "link", "meta", "base",
 ];
 
 /// 图片 URL 上限：够长到能放下 `/uploads/<64 hex>.webp`。
 const URL_MAX: usize = 300;
 const ALT_MAX: usize = 200;
 const WIDTH_MAX: u32 = 2400;
+/// 表格跨行/跨列的上限：超宽单元格会让浏览器反复做昂贵布局。
+const SPAN_MAX: u32 = 64;
 
 /// 净化一段用户 HTML。
 pub fn sanitize(input: &str) -> SafeHtml {
@@ -231,7 +247,10 @@ fn push_text(out: &mut String, text: &str, text_only: bool) {
     if text_only {
         out.push_str(&decode_entities(text));
     } else {
-        escape_into(out, text);
+        // 先解码再转义，让"净化"对已经是实体形式文本是幂等的：
+        // `&lt;script&gt;` 解码成 `<script>` 再转义回 `&lt;script&gt;`，
+        // 不会二次转义成 `&amp;lt;script&amp;gt;`（Word 导入正是先转义、再交给净化器）。
+        escape_into(out, &decode_entities(text));
     }
 }
 
@@ -358,6 +377,32 @@ fn render_open_tag(tag: &Tag) -> String {
             out.push('"');
             out.push_str(" rel=\"noopener noreferrer nofollow\"");
         }
+        "th" | "td" => {
+            // 合并单元格是表格里唯一需要保留的属性。上限 64：再多基本是伪造的异常值，
+            // 而且浏览器会把超宽单元格算成一次昂贵的布局。
+            for name in ["colspan", "rowspan"] {
+                if let Some(span) = attr(&tag.attrs, name).and_then(parse_span) {
+                    out.push_str(&format!(" {name}=\"{span}\""));
+                }
+            }
+        }
+        "iframe" => {
+            // 只认本站的 Word 查看器地址。属性全部由这里生成，用户写进来的
+            // sandbox/allow/onload 一律不落地——iframe 是最容易被拿来钓鱼和跑脚本的标签，
+            // 放开它就必须把"允许什么"说死。
+            let src = attr(&tag.attrs, "src").unwrap_or_default();
+            if !src.starts_with("/doc/") || src.len() > URL_MAX {
+                return String::new();
+            }
+            if !src[5..].chars().all(|c| c.is_ascii_hexdigit()) {
+                return String::new();
+            }
+            out.push_str(" src=\"");
+            escape_into(&mut out, src);
+            out.push_str(
+                "\" class=\"doc-frame\" sandbox=\"\" loading=\"lazy\" title=\"Word 文档\"",
+            );
+        }
         _ => {}
     }
 
@@ -377,6 +422,15 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 fn parse_width(raw: &str) -> Option<u32> {
     let value: u32 = raw.trim().parse().ok()?;
     if value == 0 || value > WIDTH_MAX {
+        return None;
+    }
+    Some(value)
+}
+
+/// 表格跨行/跨列：只收 2 以上的整数（1 是默认值，写了等于没写）。
+fn parse_span(raw: &str) -> Option<u32> {
+    let value: u32 = raw.trim().parse().ok()?;
+    if !(2..=SPAN_MAX).contains(&value) {
         return None;
     }
     Some(value)
@@ -442,14 +496,47 @@ fn escape_into(out: &mut String, text: &str) {
     }
 }
 
-/// 只处理我们自己会产生的五个实体——不追求完整 HTML 实体表。
-fn decode_entities(text: &str) -> String {
-    text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
+/// 只处理我们自己会产生的几个实体——不追求完整 HTML 实体表。
+///
+/// **必须单趟扫描**：早先写法是一串 `replace`，而 `&amp;lt;` 会先被 `&amp;`→`&`
+/// 变成 `&lt;`、再被 `&lt;`→`<` 变成真正的尖括号——等于把"文本里写着 &lt;"误解成"标签"。
+/// 单趟扫描只解一次，`&amp;lt;` 得到 `&lt;`（文本），符合 HTML 语义。
+pub(crate) fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find('&') {
+        out.push_str(&rest[..pos]);
+        let tail = &rest[pos..];
+        match match_entity(tail) {
+            Some((ch, len)) => {
+                out.push(ch);
+                rest = &tail[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn match_entity(text: &str) -> Option<(char, usize)> {
+    const TABLE: [(&str, char); 8] = [
+        ("&nbsp;", ' '),
+        ("&amp;", '&'),
+        ("&lt;", '<'),
+        ("&gt;", '>'),
+        ("&quot;", '"'),
+        ("&#39;", '\''),
+        ("&#x27;", '\''),
+        ("&apos;", '\''),
+    ];
+    TABLE
+        .iter()
+        .find(|(name, _)| text.starts_with(name))
+        .map(|(name, ch)| (*ch, name.len()))
 }
 
 /// 净化 + 抽纯文本之后的一段正文：纯文本用于搜索与摘要，HTML 用于渲染。
@@ -541,12 +628,78 @@ mod tests {
     }
 
     #[test]
+    fn already_escaped_text_is_not_escaped_twice() {
+        // Word 导入会先把正文转义再交给净化器；净化器必须对实体形式的文本幂等，
+        // 否则 `&lt;script&gt;` 会变成 `&amp;lt;script&amp;gt;`（页面上显示成乱码实体）。
+        assert_eq!(
+            sanitize("&lt;script&gt;alert(1)&lt;/script&gt;").as_str(),
+            "&lt;script&gt;alert(1)&lt;/script&gt;"
+        );
+    }
+
+    #[test]
     fn javascript_urls_are_rejected() {
         assert_eq!(
             sanitize(r#"<a href="javascript:alert(1)">x</a>"#).as_str(),
             "x"
         );
         assert_eq!(sanitize(r#"<img src="javascript:alert(1)">"#).as_str(), "");
+    }
+
+    #[test]
+    fn only_the_local_word_viewer_may_be_embedded() {
+        let sha = "a".repeat(64);
+        let ok = sanitize(&format!(
+            r#"<figure class="x"><iframe src="/doc/{sha}"></iframe></figure>"#
+        ));
+        assert!(ok.as_str().contains("<figure>"), "{}", ok.as_str());
+        assert!(
+            ok.as_str().contains(&format!(
+                "<iframe src=\"/doc/{sha}\" class=\"doc-frame\" sandbox=\"\""
+            )),
+            "{}",
+            ok.as_str()
+        );
+
+        // 站外地址、协议相对地址、非 64 位十六进制：整个标签丢掉（开标签不输出，
+        // 闭合标签由配对逻辑丢弃，页面里不会剩下可见的 `</iframe>`）。
+        for hostile in [
+            r#"<iframe src="https://evil.example/x"></iframe>"#,
+            r#"<iframe src="//evil.example/x"></iframe>"#,
+            r#"<iframe src="/doc/short"></iframe>"#,
+            r#"<iframe srcdoc="<script>alert(1)</script>"></iframe>"#,
+        ] {
+            let out = sanitize(hostile);
+            assert!(
+                !out.as_str().contains("iframe"),
+                "{hostile} => {}",
+                out.as_str()
+            );
+        }
+
+        // 地址合法但夹带 sandbox/onload 的：标签保留，属性由我们重写，夹带的那些不落地。
+        //
+        // 注：这里不放 `srcdoc="<script>…"`——本净化器的标签扫描器在遇到引号内的 `>` 时会提前
+        // 结束标签（已知限制），剩下的片段按文本转义输出，安全但不适合做"属性是否被剥离"的
+        // 断言。带 srcdoc 的 iframe 在下面那条"整个标签丢弃"里已经覆盖（没有合法 src）。
+        let stripped = sanitize(&format!(
+            r#"<iframe src="/doc/{sha}" sandbox="allow-scripts" onload="x()"></iframe>"#
+        ));
+        assert!(
+            stripped.as_str().contains("sandbox=\"\""),
+            "{}",
+            stripped.as_str()
+        );
+        assert!(
+            !stripped.as_str().contains("allow-scripts"),
+            "{}",
+            stripped.as_str()
+        );
+        assert!(
+            !stripped.as_str().contains("onload"),
+            "{}",
+            stripped.as_str()
+        );
     }
 
     #[test]

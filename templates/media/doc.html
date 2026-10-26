@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero hero--slim">
+  <p class="hero__eyebrow">Word 文档</p>
+  <h1 class="hero__title">{{ title }}</h1>
+  <p class="hero__lead">
+    {{ size_label }} · 上传时已解析并净化，这里只做展示 ·
+    <a href="{{ back_href }}">返回前厅</a>
+  </p>
+</section>
+
+<article class="card word-view rich-text">
+  {{ html|safe }}
+</article>
+{% endblock %}

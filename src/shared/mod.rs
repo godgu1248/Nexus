@@ -5,6 +5,7 @@
 
 pub mod appearance;
 pub mod audit;
+pub mod docx;
 pub mod http;
 pub mod pagination;
 pub mod ratelimit;

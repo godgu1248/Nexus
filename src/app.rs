@@ -238,6 +238,35 @@ mod view_tests {
     }
 
     #[test]
+    fn layout_uses_one_cache_key_for_every_asset_it_references() {
+        // nginx 对 /static/* 发一年 immutable，改样式或脚本必须换 `?v=`，否则老访客看不到。
+        // 这三个版本号曾经漂过（css/editor 是 20261027、app.js 还是 20261024），
+        // 结果改 app.js 之后老访客一直在跑旧脚本——所以这里钉死"同一个构建只用一把钥匙"。
+        let html = index_view().render().expect("首页渲染失败");
+        let versions: Vec<&str> = html
+            .match_indices("?v=")
+            .map(|(at, _)| {
+                let rest = &html[at + 3..];
+                let end = rest
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(rest.len());
+                &rest[..end]
+            })
+            .collect();
+        assert!(
+            versions.len() >= 3,
+            "应该至少有三个带 ?v= 的静态引用，实际 {}",
+            versions.len()
+        );
+        let first = versions[0];
+        assert!(
+            versions.iter().all(|v| *v == first),
+            "静态资源版本号不一致：{versions:?}"
+        );
+        assert_eq!(first.len(), 8, "版本号应该是 YYYYMMDD");
+    }
+
+    #[test]
     fn guests_get_a_badge_and_a_banner_but_members_do_not() {
         let mut guest = index_view();
         guest.nav_display_name = "小明".to_string();
