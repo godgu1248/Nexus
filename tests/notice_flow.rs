@@ -232,10 +232,28 @@ async fn red_dot_appears_until_the_member_acknowledges() {
         (shown_after - after).abs() <= 2,
         "确认一条之后，红点数字仍要与库里相符：渲染 {shown_after}，库里 {after}"
     );
-    assert!(
-        shown_after <= shown,
-        "确认只会减少未读，红点数字不该变大：之前 {shown}，之后 {shown_after}"
-    );
+    // 这里**不能**断言"确认之后红点数字变小"：公告是全局的，并行用例随时会发新公告，
+    // 这个人的未读数完全可能从 3 涨到 5。曾经写过 `shown_after <= shown`，
+    // 在满负载跑全量时就会红——那不是产品缺陷，是断言把"并发新增"当成了"确认无效"。
+    // 能钉死且不依赖全局计数的是：这条公告已经不在他的未读集合里了。
+    let still_unread: i8 = sqlx::query_scalar(
+        "SELECT EXISTS( \
+             SELECT 1 FROM announcements n \
+              WHERE n.id = ? \
+                AND n.is_active = 1 \
+                AND n.deleted_at IS NULL \
+                AND NOT EXISTS ( \
+                    SELECT 1 FROM announcement_acks a \
+                     WHERE a.announcement_id = n.id AND a.user_id = ? \
+                ) \
+         )",
+    )
+    .bind(notice_id)
+    .bind(member_id)
+    .fetch_one(&pool)
+    .await
+    .expect("查未读集合失败");
+    assert_eq!(still_unread, 0, "确认过的公告不该再算作他的未读");
 
     // 把这个人剩下的公告也确认掉，红点必须彻底消失。
     // 轮次给到 6：并行用例每隔几毫秒就可能发一条新公告，ack 的速度要追得上它。

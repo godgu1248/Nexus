@@ -23,7 +23,6 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::SameSite};
-use tower_sessions_memory_store::MemoryStore;
 
 use crate::admin::routes::routes as admin_routes;
 use crate::auth::middleware::{MaybeUser, MaybeUserRow, ensure_csrf};
@@ -36,6 +35,7 @@ use crate::kb::routes::routes as kb_routes;
 use crate::media::routes::routes as media_routes;
 use crate::notice::routes::routes as notice_routes;
 use crate::public::routes::routes as public_routes;
+use crate::shared::session_store::BoundedStore;
 use crate::state::AppState;
 use crate::task::routes::routes as task_routes;
 
@@ -54,7 +54,11 @@ pub fn build_router(state: AppState) -> Router {
 
     // 内存 session：单进程、零外部依赖（需求禁 Redis）。代价是重启后所有人要重新登录，
     // 已记入 DESIGN §12 技术债——接受它，因为中小型企业的登录成本远低于多一个组件的运维成本。
-    let session_layer = SessionManagerLayer::new(MemoryStore::default())
+    //
+    // 用自己写的 `BoundedStore` 而不是 `tower_sessions_memory_store::MemoryStore`：
+    // 后者的 `load` 只把过期会话过滤掉、从不删除，匿名访客每打开一次表单页就会留下
+    // 一条永不回收的记录（详见 `shared/session_store.rs` 的模块注释）。
+    let session_layer = SessionManagerLayer::new(BoundedStore::default())
         .with_name(config.session_cookie_name.clone())
         .with_secure(config.session_secure)
         .with_http_only(true)

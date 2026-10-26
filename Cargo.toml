@@ -35,8 +35,16 @@ tokio = { version = "=1.54.1", features = [
 ] }
 tower = "=0.5.3"
 tower-http = { version = "=0.7.1", features = ["trace", "request-id", "limit"] }
-tower-sessions = "=0.15.0"
-tower-sessions-memory-store = "=0.15.0"
+# 只要 axum-core 这个特性：它提供 `Session` 提取器，是 axum 0.8 能拿到会话的前提。
+# `memory-store` 默认特性被**刻意关掉**——我们不用 `MemoryStore`，它的
+# `load` 只过滤过期会话、从不删除，是一项只增不减的内存账（详见
+# `src/shared/session_store.rs` 的模块注释）。关掉之后这个 crate 根本不参与编译。
+tower-sessions = { version = "=0.15.0", default-features = false, features = [
+    "axum-core",
+] }
+# `tower-sessions-core` 的 `SessionStore` 是 `#[async_trait]` 定义的，
+# 我们实现自己的存储必须用它。版本与 lock 里已有的传递依赖一致，不引入新包。
+async-trait = "=0.1.92"
 argon2 = "=0.6.0"
 thiserror = "=2.0.21"
 serde = { version = "=1.0.229", features = ["derive"] }

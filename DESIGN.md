@@ -3217,3 +3217,122 @@ v0.1.0 那次把标题写成 `Nexus 鏋㈢航` 的 ANSI 事故没有复现。
 `^version = "..."`（单一真相），重打得到 0.1.3 三包，公网逐个下载重算哈希 3/3 一致。
 `local-build/` 里同时删掉 0.1.2 的旧包，`NOTE.txt` 重写为"同一份源码、不同链接器，
 与 Actions 产物不逐字节相同"。
+
+## 36. 代码审查与性能/兼容性优化
+
+### 36.1 审查范围与硬指标
+
+owner 的要求是「先审查再优化」。所以这一轮先做静态与实测盘查，再动手改，改的每一项都要有可核对的数字。
+
+规模：`src/` 共 **15,225 行**，最大文件 `src/public/handler.rs` 784 行、`src/forum/handler.rs` 734、
+`src/kb/handler.rs` 703、`src/config.rs` 701、`src/admin/handler.rs` 664。
+
+盘查结果（硬指标，不是印象）：
+
+| 项 | 结果 |
+| --- | --- |
+| `unwrap / expect / panic` | 92 处，**逐条核对后全部在 `#[cfg(test)]` 或可证明的默认值**（`config.rs` 默认绑定地址/时区、`db.rs` 重试循环末尾、`auth/service.rs` 的 `accepted 蕴含 user.is_some()`） |
+| `SELECT *` | **0 处**，全部显式列清单 |
+| 列表查询 | `LIMIT ?` **17 处**，覆盖全部列表路径 |
+| 阻塞 IO | 仅 `media/service.rs` 的 `create_dir_all/write/rename`，整段在 `spawn_blocking` 内 |
+| 全局共享状态 | 4 个 `LazyLock`（argon2 信号量、失败计数 Map、argon2 实例、哑哈希），argon2 全部经 `spawn_blocking` |
+| 每请求查库 | `MaybeUser` 用 `CachedUser` 扩展，一个请求只查一次用户 + 一次 group_ids |
+
+### 36.2 三个真问题
+
+#### 36.2.1 会话存储无界增长（公网可触发）
+
+`tower-sessions-memory-store 0.15.0` 的 `load` 只把过期会话**过滤掉**，从不删除；
+而 `ensure_csrf` 会给每个匿名访客签发令牌并落一条会话记录。于是任何人扫一遍全站，
+内存里就多出一堆永不过期的 `HashMap` 条目——这是一个不需要登录就能触发的缓慢 OOM。
+
+处置：新建 `src/shared/session_store.rs` 的 `BoundedStore`（`MAX_SESSIONS = 20_000`、
+`SWEEP_INTERVAL = 60s`）：
+
+- `load` 命中过期记录**顺手删除**（原实现只返回 `None`，条目留着）；
+- `insert` 在「超上限」或「距上次清扫 ≥60s」时清扫：先 `retain` 掉过期的，仍超限则按
+  `expiry_date` 升序淘汰（先死的最早过期的，刚建的会话不会被误伤）；
+- `Cargo.toml` 把 `tower-sessions` 的默认特性关掉（`default-features = false, features = ["axum-core"]`），
+  `tower-sessions-memory-store` 从依赖里删除，`async-trait = "=0.1.92"`（lock 里已有，未引入新包）。
+
+6 条单测覆盖：过期即删、超限淘汰最旧、刚建的不会被淘汰、`create` 撞 id 时重生成、
+`prune` 幂等、`len`/`is_empty` 口径一致。
+
+#### 36.2.2 审计表缺 `created_at` 索引（实测 7.1 倍）
+
+`audit_logs` 原有 `idx_audit_actor / idx_audit_target / idx_audit_action`，三条都以列 + `created_at` 结尾，
+**没有一条以 `created_at` 打头**；而管理页默认视图是 `ORDER BY created_at DESC, id DESC LIMIT 20`。
+
+`migrations/0014_audit_index.sql`：`ALTER TABLE audit_logs ADD KEY idx_audit_created (created_at, id);`
+
+实测（test 库，5,338 行，`ANALYZE` 之后）：
+
+| 版本 | 计划 | 扫描行数 | MySQL 侧耗时 |
+| --- | --- | --- | --- |
+| 无索引 | `type=ALL, key=NULL, Using filesort` | 5,448 | 0.00318200 s |
+| 有索引 | `type=index, key=idx_audit_created, Backward index scan` | **20** | **0.00044925 s** |
+
+**7.1 倍**，且差距随表增长线性放大——审计表是全库唯一只增不减的表，这条会越来越明显。
+
+生产上（60 行）优化器仍然选 `ALL + Using filesort`：**这是对的**，54 行的表走索引反而多一次随机回表。
+把「索引已建」和「这周就该变快」分开说，比拿测试库的数字去糊线上更诚实。
+
+#### 36.2.3 `color-mix()` 没有回退（兼容性）
+
+`static/app.css` 里有三处 `color-mix(in srgb, ...)` 直接写在自定义属性里。Chromium 111 / Safari 16.2
+之前不认识 `color-mix`，整条自定义属性判为无效 → 用它的 `border` / `box-shadow` 变成**什么都没有**，
+而不是退化成弱一点的颜色。补了固定色回退（`rgba(110,168,254,.45)` / `.16` / `rgba(139,124,246,.14)`），
+现代浏览器读后面的 `color-mix` 覆盖。
+
+### 36.3 一个假设被实测否定——所以撤回
+
+审查时我判断：`list_audit` 那种 `(? IS NULL OR a.actor_id = ?)` 的 catch-all 写法会让索引失效
+（优化器无法在编译期确定该走哪条索引）。据此把 SQL 改成动态拼接 + `AssertSqlSafe`。
+
+**实测否定了这个判断。** 同一会话内 `PREPARE` + 全 NULL 绑定 + `EXPLAIN`：
+
+```
+| type=index | key=idx_audit_created | rows=20 | Backward index scan |
+```
+
+新写法（无 WHERE）与旧写法（全 NULL catch-all）**计划完全一样**；按 actor 过滤时
+`EXPLAIN FORMAT=TREE` 显示 `Covering index lookup on a using idx_audit_actor (reverse)`。
+MySQL 8.0.46 的优化器能正确处理这种写法。
+
+于是 `git checkout -- src/admin/model.rs` **完整撤回**动态 SQL 改造，只保留索引。理由：
+没有实测收益，却引入 `AssertSqlSafe` 这个「我保证这条 SQL 安全」的逃生舱，
+破坏项目「SQL 一律字面量、禁 `format!` 拼」的既有不变式（也正是 sqlx 0.9 的 `SqlSafeStr`
+帮我们守住的那条线）。**假设错了就撤回，不留着「反正也没坏处」的改动。**
+
+### 36.4 测量方法，以及我在测量上踩的三个坑
+
+1. 批量插入后不 `ANALYZE TABLE`：优化器还按旧统计（rows=338）决策，"加索引前后"都是全表扫描，
+   差点得出「索引没用」的结论。
+2. `PREPARE` 与 `EXECUTE` 拆到两个 `docker exec`：`ERROR 1243 (HY000): Unknown prepared statement
+   handler (oldq) given to EXECUTE`——预处理语句是**会话级**的。修法是把 `PREPARE` / `SET` /
+   `EXPLAIN EXECUTE` 全塞进同一个 `mysql -e`。
+3. `?` 占位符写进普通 `EXPLAIN ... -e`：`ERROR 1064 (42000) ... near '? IS NULL OR a.actor_id = ?)'`
+   ——占位符只能出现在 `PREPARE` 的字符串里。
+
+留了 `ops/explain-audit.sh` 与 `ops/explain-audit-b.sh` 作为可复现的测量脚本。
+
+### 36.5 记录但**不改**的项（附理由）
+
+| 项 | 为什么不改 |
+| --- | --- |
+| `kb/model.rs::bump_view` 每次 GET 一次 `UPDATE ... view_count + 1` | 单行主键更新，团队规模下可接受；加去重会改变「浏览量」的语义，不该由我擅自决定 |
+| `search_docs` 的 `LIKE '%q%'` 走两次全表（rows + total） | 档案量在几百篇量级；真要优化应上全文索引，那是另一个需求 |
+| `group/model.rs::list_active_users` 无 `LIMIT` | 两个调用点都是管理/指派下拉，几十行；加了反而会出现「列表里找不到某个人」 |
+| `/tasks` 对来宾 403 而非 404 | owner 已明确「这些问题不要紧」；页面入口也已不给来宾 |
+| `media` 上传只要求登录 | 同上，owner 明确不要求 |
+
+### 36.6 验证与上线
+
+- `cargo test` **257 passed / 0 failed**（lib 170 + 12 个集成目标），连跑两轮（第二轮不重置库）全绿。
+- `cargo clippy --all-targets -- -D warnings` = 0；`cargo fmt --check` = 0。
+- 顺带修了一条自己写坏的测试：`notice_flow` 的 `assert!(shown_after <= shown)` 在满负载下会失败
+  ——公告是全局的，并行用例随时发新公告，未读数**可以变大**，这条断言把「并发新增」误判成「确认无效」。
+  改成不依赖全局计数的精确断言（`EXISTS` 该用户是否还有未确认的这条公告）。
+- musl 静态二进制 7,689,096 B，sha256 `2b99e86f1811760ca9c1293a9d3c3361978d1955ce703bfc319ce530b7f61ac5`，
+  已部署（`systemctl restart nexus` → `active`），日志只有一条「数据库迁移已完成」（迁移 14 条全 success）。
+- 线上 `ops/smoke.ps1` **19/19**；生产 `audit_logs` 上 `idx_audit_created (created_at, id)` 已存在。

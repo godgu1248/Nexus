@@ -55,7 +55,14 @@
   --font-ui: var(--font-sans);
   --font-serif: "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", Georgia, "Times New Roman", serif;
   --font-round: "PingFang SC", "HarmonyOS Sans SC", "MiSans", Nunito, "Segoe UI", system-ui, sans-serif;
-  /* 由强调色派生的半透明色，随主题自动变；color-mix 在 2023 之后的主流浏览器都支持。 */
+  /* 由强调色派生的半透明色，随主题自动变；color-mix 在 2023 之后的主流浏览器都支持。
+     下面三行是**回退**：Chromium 111 / Safari 16.2 之前的浏览器不认识 color-mix，
+     会把整个自定义属性判为无效，于是边框、光晕、选中态直接消失（不是变淡，是没有）。
+     先给一组按默认强调色算好的固定值，老浏览器退化成"颜色不跟随主题但看得清"，
+     新浏览器读到后面的 color-mix 会覆盖它——两条都留着，不是冗余。 */
+  --accent-soft: rgba(110, 168, 254, 0.45);
+  --accent-glow: rgba(110, 168, 254, 0.16);
+  --accent2-glow: rgba(139, 124, 246, 0.14);
   --accent-soft: color-mix(in srgb, var(--accent) 45%, transparent);
   --accent-glow: color-mix(in srgb, var(--accent) 16%, transparent);
   --accent2-glow: color-mix(in srgb, var(--accent-2) 14%, transparent);
