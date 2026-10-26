@@ -136,12 +136,24 @@ jobs:
           # Release 标题/正文优先用仓库里的 release-notes（显式 UTF-8 读，避免中文乱码）
           TITLE="Nexus 枢纽 $TAG"
           if [ -f "release-notes/$TAG.title" ]; then TITLE="$(cat "release-notes/$TAG.title")"; fi
+
+          # 两条路径都要在"Release 已存在"时也能把标题与正文改过来。
+          #
+          # 早先的写法是 `gh release create ... || gh release upload "$TAG" ... --clobber`：
+          # create 失败（Release 已存在）后只上传资产，标题与正文永远停在第一次发布的样子。
+          # 结果就是 v0.1.4 / v0.1.5 的发布页正文是 GitHub 自动生成的提交列表——
+          # 因为 release-notes 是打完 tag 之后才补进仓库的，第一次 create 时文件还不存在。
+          # 现在失败分支改成 create-or-edit：先尝试 create，失败就 edit 标题与正文，再 clobber 资产。
+          publish() {
+            gh release create "$TAG" --title "$TITLE" "$@" assets/* && return 0
+            gh release edit "$TAG" --title "$TITLE" "$@" || true
+            gh release upload "$TAG" assets/* --clobber
+          }
+
           if [ -f "release-notes/$TAG.md" ]; then
-            gh release create "$TAG" --title "$TITLE" --notes-file "release-notes/$TAG.md" assets/* || \
-            gh release upload "$TAG" assets/* --clobber
+            publish --notes-file "release-notes/$TAG.md"
           else
-            gh release create "$TAG" --title "$TITLE" --generate-notes assets/* || \
-            gh release upload "$TAG" assets/* --clobber
+            publish --generate-notes
           fi
       - name: 回读校验
         env:

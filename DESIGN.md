@@ -3462,3 +3462,63 @@ nginx 侧是 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`—�
 - `cargo test` **261 passed / 0 failed**（lib 174 + 12 个集成目标）；`clippy --all-targets -- -D warnings` 与 `fmt --check` 均 0。
 - 部署后用同一套 A/B 脚本复测：A 组仍在第 6 次锁定，**B 组（每次伪造 XFF）也在第 6 次锁定**——限速不再能被这个头绕过。这条复测是这次修复唯一的验收标准，别用"代码看着对"代替它。
 - 审查期间在生产留下的探针数据（`xffprobe*` 的 `auth.login_failed` 审计行）在验收后清理。
+
+### 37.8 发布正文为什么是自动生成的（流程缺陷，已修 workflow）
+
+v0.1.4 与 v0.1.5 的 Release 页面上，正文都不是 `release-notes/*.md` 里的手写说明，而是 GitHub
+按提交记录生成的列表。这不是"忘了写"，是**顺序错了 + workflow 只在 create 时用 notes**：
+
+`.github/workflows/release.yml` 原来的发布步骤是
+
+```bash
+gh release create "$TAG" --title "$TITLE" --notes-file "release-notes/$TAG.md" assets/* || \
+gh release upload "$TAG" assets/* --clobber
+```
+
+`||` 后面只 `upload`。于是**只要 Release 已存在**（或第一次跑时 notes 文件还没进仓库），
+`create` 失败之后标题与正文就再也不会被更新——补了 notes 文件、重跑 workflow 也没用。
+而我们的实际顺序恰恰是：先打 tag（CI 立刻开始跑，此刻仓库里没有 `release-notes/vX.Y.Z.md`）
+→ 再补 notes 文件 → 标签已经推上去了。两次都是这个顺序，所以两次都自动生成。
+
+修法是把失败分支改成 create-or-edit：
+
+```bash
+publish() {
+  gh release create "$TAG" --title "$TITLE" "$@" assets/* && return 0
+  gh release edit "$TAG" --title "$TITLE" "$@" || true
+  gh release upload "$TAG" assets/* --clobber
+}
+```
+
+这样"Release 已存在"变成一次可修复的编辑，而不是一次静默的跳过。**没有对 v0.1.5 重跑**：
+重跑会用新构建的字节替换现有资产，而镜像与公网校验记录都指向现在这一版，
+为了正文去动资产哈希是拿真东西换装饰。正文缺失这件事记在这里，从 v0.1.6 起生效。
+
+同时补了一条更实际的纪律：**notes 文件必须在打 tag 之前进仓库**——
+`publish()` 只是让重跑能补救，不该把"补救"当成流程。
+
+### 37.9 v0.1.5 镜像
+
+`/opt/nexus/downloads/` 顶层是 CI 资产（与 Release 逐字节一致），`local-build/` 是本机 zig 那套：
+
+| 位置 | 文件 | 字节 |
+| --- | --- | --- |
+| 顶层 | nexus-0.1.5-linux-x86_64.tar.gz | 3,720,808 |
+| 顶层 | nexus-0.1.5-linux-x86_64.zip | 3,736,181 |
+| 顶层 | nexus-0.1.5-source.zip | 545,074 |
+| 顶层 | nexus-0.1.5-windows-x86_64.zip | 3,698,796 |
+| 顶层 | SHA256SUMS.txt | 379 |
+| local-build | nexus-0.1.5-linux-x86_64.zip | 3,644,812 |
+| local-build | nexus-0.1.5-windows-x86_64.zip | 3,686,241 |
+
+公网侧用 `.audit/verify-mirror015.ps1` 逐个下载、重算 sha256、与两个 `SHA256SUMS.txt` 比对：
+顶层 4 个 `OK`、`local-build` 3 个 `OK`、`MIRROR.txt` 693 字节，`FAILURES=0`。
+
+安装脚本这次踩了两个坑（都不在产品里，但会让"装完了"变成假象）：
+
+1. `ops/install-015.sh` 少了 `cd "$D"`，`ls -1 nexus-0.1.5-*` 在 `/root` 里跑，
+   于是文件都在、`MIRROR.txt` 只有 202 字节的壳；`{ ... } > file` 的重定向把 `set -e` 的
+   失败也吞了，脚本照样退出 0。已补 `cd` 并重跑，`MIRROR.txt` 693 字节。
+2. `rsh.ps1 -Script` 上传到 `/tmp/_remote.sh` 执行、**不留在 `/root/<名字>`**，
+   所以 `run-015.sh` 里 `sh /root/install-015.sh` 报 `No such file or directory`；
+   安装脚本要用 `-Put` 显式放到 `/root/` 再调。
