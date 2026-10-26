@@ -643,3 +643,56 @@ async fn the_join_queue_only_lists_pending_requests() {
     let html = body_of(get(&app, "/admin/joins", Some(&admin_cookie)).await).await;
     assert!(html.contains(&waiting), "待审申请应出现在队列里：{html}");
 }
+
+// ── 11. 并发通过同一条投稿：只应建出一篇草稿 ─────────────────────────────
+
+/// 两个管理员同时点"通过"（或者一个人双击）时，只能有一次成功、只能建出一篇草稿。
+///
+/// 修复前：两次都读到 pending，各自建了一篇草稿，回填只有一个成功——库里多出一篇
+/// 没有任何投稿指向它的重复文档，而页面上看不出它是重复的。
+#[tokio::test]
+async fn approving_the_same_submission_twice_creates_exactly_one_draft() {
+    let url = db_url();
+    let (_app, pool) = harness(&url).await;
+
+    let admin_id = make_user(&pool, &unique("adm"), Role::Admin, UserStatus::Active).await;
+    let viewer = nexus::auth::policy::CurrentUser {
+        id: admin_id,
+        role: Role::Admin,
+        status: UserStatus::Active,
+        group_ids: Vec::new(),
+    };
+
+    let author_id = make_user(&pool, &unique("sub"), Role::User, UserStatus::Active).await;
+    let title = unique("并发投稿");
+    let mut tx = pool.begin().await.expect("开事务失败");
+    let submission_id = nexus::public::model::create_submission(
+        &mut tx,
+        nexus::public::model::NewSubmission {
+            author_id,
+            title: &title,
+            body: "正文",
+        },
+    )
+    .await
+    .expect("建投稿失败");
+    tx.commit().await.expect("提交失败");
+
+    let (first, second) = tokio::join!(
+        nexus::admin::service::approve_submission(&pool, &viewer, None, submission_id),
+        nexus::admin::service::approve_submission(&pool, &viewer, None, submission_id),
+    );
+
+    let succeeded = [first.is_ok(), second.is_ok()]
+        .into_iter()
+        .filter(|ok| *ok)
+        .count();
+    assert_eq!(succeeded, 1, "并发通过同一条投稿只能有一个成功");
+
+    let docs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM kb_docs WHERE title = ?")
+        .bind(&title)
+        .fetch_one(&pool)
+        .await
+        .expect("查档案失败");
+    assert_eq!(docs, 1, "只能建出一篇草稿，多出来的就是没人认领的重复文档");
+}

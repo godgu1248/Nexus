@@ -353,6 +353,32 @@ pub async fn find_submission(pool: &MySqlPool, id: u64) -> Result<Option<Submiss
     row.as_ref().map(submission_from_row).transpose()
 }
 
+/// 在事务里锁住一条投稿，用于"通过投稿"这种**先读后写、中间还要跨模块建文档**的流程。
+///
+/// `FOR UPDATE OF s` 只锁 `public_submissions` 那一行：不加 `OF s` 时连 `users` 的对应行
+/// 也会被锁，管理员改这个用户的状态就会被一条投稿审批堵住。
+///
+/// 为什么需要它：通过投稿要"建草稿（kb 自己的事务）→ 回填投稿行"，中间有窗口。
+/// 两个管理员同时点"通过"会各建一篇草稿，只有一次回填成功，库里就多出一篇没人认领的
+/// 草稿。有了行锁，第二个请求会等第一个提交，然后看到状态已不是 pending 而直接拒绝。
+pub async fn lock_submission(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    id: u64,
+) -> Result<Option<Submission>, AppError> {
+    let row = sqlx::query(
+        "SELECT s.id, s.author_id, u.display_name AS author_name, s.title, s.body, s.status, \
+                s.review_note, s.reviewed_at, s.created_at \
+           FROM public_submissions s JOIN users u ON u.id = s.author_id \
+          WHERE s.id = ? AND s.deleted_at IS NULL \
+          FOR UPDATE OF s",
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    row.as_ref().map(submission_from_row).transpose()
+}
+
 /// 一页投稿。`author` / `status` 为 `None` 时不过滤——用同一条 SQL 加 `? IS NULL` 判断，
 /// 避免为四种组合各写一份字面量 SQL（那四份里迟早有一份会漏掉 `deleted_at`）。
 pub async fn list_submissions(

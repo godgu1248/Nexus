@@ -3522,3 +3522,124 @@ publish() {
 2. `rsh.ps1 -Script` 上传到 `/tmp/_remote.sh` 执行、**不留在 `/root/<名字>`**，
    所以 `run-015.sh` 里 `sh /root/install-015.sh` 报 `No such file or directory`；
    安装脚本要用 `-Put` 显式放到 `/root/` 再调。
+
+## 38. 第三轮审查：反向代理层与一条并发窗口
+
+### 38.1 这一轮换了地方看
+
+前两轮（§36、§37）看的是 Rust 代码与 SQL。这一轮把视角移到**部署边界**——nginx 与实际发出的
+HTTP 响应。方法没变：先在生产上测，再改，再用同一条命令复测。原因是这类问题读代码看不出来：
+`deploy/nginx.conf` 里每个 directive 都合法，缺的那些只有对着真实响应头才看得见。
+
+### 38.2 从来没有压缩
+
+`curl` 拿 `/static/app.css`：`size_download=37620`，带 `--compressed` 还是 37620——
+响应里根本没有 `Content-Encoding`。nginx 默认 `gzip off`，于是每个首次访问的成员都要完整下载
+21 KB 的 CSS 与 51 KB 的 htmx。
+
+| 资源 | 改前 | 改后（gzip） |
+| --- | --- | --- |
+| `/` | 4,404 | 1,665 |
+| `static/app.css` | 37,620 | 10,253 |
+| `static/htmx.min.js` | 51,076 | 16,677 |
+| `static/editor.js` | 6,461 | 2,683 |
+
+**第二次才修对的地方**：第一版 `gzip_types` 写的是 `application/javascript`，改完一测
+`htmx.min.js` 仍然 51,076 → 51,076。因为 nginx 的 `mime.types` 把 `.js` 映射成
+`text/javascript`，`application/javascript` 匹配不到。加上 `text/javascript` 才生效。
+这正是"改完必须复测"的价值——只看 `nginx -t` 通过，会以为已经压上了。
+
+### 38.3 两条 `Cache-Control` 与 `add_header` 的继承陷阱
+
+`/static/` 的响应里同时有：
+
+```
+Cache-Control: max-age=2592000
+Cache-Control: public, max-age=31536000, immutable
+```
+
+一条来自 `expires 30d`，一条来自显式 `add_header`。两个 `max-age` 互相矛盾，
+浏览器取哪条没有保证。现在只留显式那条（内容哈希换 URL 才换文件名，一年是对的）。
+
+同一个坑还有第二面：nginx 的 `add_header` **只在当前层级没有 `add_header` 时才继承上层**。
+`/static/`、`/uploads/`、`/downloads/` 各加了一条 `Cache-Control` 之后，server 级的
+`X-Frame-Options` 与 `Referrer-Policy` 就被静默丢掉了——`curl -I` 能看到它们不见了。
+现在每个 location 都显式重复三条安全头。
+
+### 38.4 界面说 ≤4 MB，nginx 却在 2 MB 就拦
+
+`DESIGN §32` 与编辑器提示都写"图片 ≤ 4 MB"，`src/media/service.rs` 的 `MAX_UPLOAD_BYTES`
+是 4 MiB；但 `client_max_body_size` 是 `2m`。实测：POST 2.5 MB 到 `/media/upload`，
+
+```
+413 Request Entity Too Large
+<title>413 Request Entity Too Large</title>
+```
+
+**这是 nginx 自己的错误页**，`Content-Length` 183 字节——请求根本没到应用。
+也就是说 2–4 MB 的图片永远传不上去，而界面上没有任何提示解释这件事。
+
+改成 `5m`（4 MiB + 64 KiB 表单余量 + 余量），复测同一请求：2.5 MB → **303**（跳登录页），
+4 MiB → **303**。限制重新只由应用层决定，nginx 只负责别让超大请求占住内存。
+
+**这类"两处各有一个上限"的地方，必须让严的那个等于松的那个，或者干脆只有一处。**
+
+### 38.5 动态页面不该被缓存
+
+登录页、内厅、档案详情都是 `200` + 无 `Cache-Control`。退出登录后按浏览器"后退"，
+可能看到上一个账号的页面（bfcache 之外的普通缓存也会）。现在 `location /` 统一加
+`Cache-Control: no-store`；htmx 片段（红点、横幅）同理——它们每次都要查库才知道该不该亮。
+
+### 38.6 并发通过投稿会多建一篇草稿
+
+`admin::service::approve_submission` 原来的顺序：
+
+1. 事务外 `find_submission` 读状态；
+2. 调 `kb_service::create_doc`（**kb 自己的事务**）建草稿；
+3. 新开事务 `mark_submission_reviewed`（`WHERE status = 'pending'`）回填。
+
+第 1 步与第 3 步之间有窗口。两个管理员同时点"通过"，两次都能读到 `pending`、各建一篇草稿，
+回填只有一个成功——库里多出一篇没有任何投稿指向它的重复文档，页面上看不出它是重复的。
+§25.4 当时只记了"回填失败会留下草稿"这个代价，没记"并发会重复建"。
+
+修法是在事务里先锁行：
+
+```rust
+let mut tx = pool.begin().await?;
+let Some(submission) = public_model::lock_submission(&mut tx, submission_id).await? else { … };
+```
+
+`lock_submission` 的 SQL 末尾是 `FOR UPDATE OF s`。**`OF s` 不能省**：不加时
+`SELECT … FROM public_submissions s JOIN users u …` 会把 `users` 中对应行也锁上，
+于是"审批一条投稿"会挡住"管理员改这个用户的状态"，两类操作互相拖。
+
+锁只覆盖 `public_submissions` 的一行；建草稿仍然用 kb 自己的事务（池上限 5，当前事务占 1）。
+代价是这一步会短暂占用两个连接，换来的是"同一时刻只有一个审批在推进"。
+
+**测试先证明它会失败**：把 `src/admin/service.rs` stash 回修复前，跑新用例得到
+
+```
+assertion `left == right` failed: 只能建出一篇草稿，多出来的就是没人认领的重复文档
+  left: 2
+ right: 1
+```
+
+恢复修复后再跑即通过。这条纪律值得固定：**新写的回归测试必须先在旧代码上红一次**，
+否则你只是给"现在的行为"拍了张照。
+
+### 38.7 记录但没改
+
+- 每次页面访问会触发两个 htmx 请求（`/notice/dot` 与 `/notice/banner`），各查一次库。
+  合并成一个片段能省一个请求与一次查询，但要改模板结构；当前流量下不值得，记在这里。
+- `/healthz` 每次都 `SELECT 1`。监控频率低，且这正是"探针要探的东西"，不改。
+- 仍无 `Content-Security-Policy`：htmx 的内联行为需要浏览器实测，不能靠读代码断言。
+- 静态资源没有 `ETag`/`Last-Modified` 协商缓存：文件名带版本查询串 + 一年强缓存已经够用。
+
+### 38.8 验证
+
+- `cargo test` **262 passed / 0 failed**（lib 174 + 13 个集成目标；新增
+  `approving_the_same_submission_twice_creates_exactly_one_draft`）。
+- `clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 均 0。
+- 线上（改配置后逐项复测）：`/` 1,665 B、`app.css` 10,253 B、`htmx.min.js` 16,677 B、
+  `editor.js` 2,683 B；`/static/` 只剩一条 `Cache-Control` 且三个安全头都在；
+  `/` 带 `no-store`；2.5 MB 与 4 MiB 上传均返回 303（到达应用）。

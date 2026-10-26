@@ -358,6 +358,11 @@ pub async fn submission_queue(
 /// 硬塞进外层事务要把 kb 的全部写路径改造成"接受外部 tx"，为一个低频动作不值得。
 /// 代价是极端情况下"草稿建了、回填失败"，此时投稿仍是 pending，重试会再建一篇草稿；
 /// 失败分支会把 `doc_id` 打进错误日志，便于人工收拾。
+///
+/// §38 补的正事：**先锁行、再建草稿**。原来的顺序是"读状态（事务外）→ 建草稿 → 回填"，
+/// 两个管理员同时点"通过"会各建一篇草稿，而回填只有一个能成功——库里就多出一篇
+/// 没人认领的草稿，且页面上看不出它是重复的。现在 `lock_submission` 在事务里把这一行
+/// 锁住，第二个请求会阻塞到第一个提交，醒来时状态已不是 pending，直接 409。
 pub async fn approve_submission(
     pool: &MySqlPool,
     viewer: &CurrentUser,
@@ -366,14 +371,19 @@ pub async fn approve_submission(
 ) -> Result<u64, AppError> {
     require_admin(viewer)?;
 
-    let Some(submission) = public_model::find_submission(pool, submission_id).await? else {
+    let mut tx = pool.begin().await?;
+    let Some(submission) = public_model::lock_submission(&mut tx, submission_id).await? else {
+        tx.rollback().await?;
         return Err(AppError::NotFound);
     };
     if submission.status != SubmissionStatus::Pending {
+        tx.rollback().await?;
         return Err(AppError::conflict("这条投稿已经处理过了"));
     }
 
     // 草稿作者是操作的管理员：外人没有建档权限，而且草稿需要有人维护（F4）。
+    // 这一步用的是 kb 自己的连接（池上限 5，当前事务占 1），失败时外层事务随 Drop 回滚，
+    // 投稿仍是 pending，可以原样重试。
     let doc_id = kb_service::create_doc(
         pool,
         viewer,
@@ -398,7 +408,6 @@ pub async fn approve_submission(
         err
     })?;
 
-    let mut tx = pool.begin().await?;
     if !public_model::mark_submission_reviewed(
         &mut tx,
         submission_id,
@@ -409,6 +418,7 @@ pub async fn approve_submission(
     )
     .await?
     {
+        // 走到这里说明有人绕过了行锁（例如手工改库），保守回滚并留证据。
         tx.rollback().await?;
         tracing::error!(
             submission_id,
