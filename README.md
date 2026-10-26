@@ -68,7 +68,7 @@ https://flowrun.cloud/downloads/MIRROR.txt
 ```
 
 镜像里的字节与 Release 资产完全一致（`sha256sum -c` 能过），目录说明见 `MIRROR.txt`。
-当前镜像放的是 **v0.1.5**（同一目录只留最新一版，历史版本请到 Release 页取）。
+当前镜像放的是 **v0.1.6**（同一目录只留最新一版，历史版本请到 Release 页取）。
 另外 `https://flowrun.cloud/downloads/local-build/` 还放了维护者本机用 `package.ps1` 打的那一套：
 源码相同、链接器不同，所以 Linux 二进制字节不一样，带自己的 `SHA256SUMS.txt` 与 `NOTE.txt`。
 要「与 Release 逐字节一致」用上面那组，要「维护者本机验证过的那份」用子目录。
@@ -78,7 +78,7 @@ https://flowrun.cloud/downloads/MIRROR.txt
 解压后三行就能跑起来（Windows 把 `./nexus` 换成 `.\nexus.exe`）：
 
 ```bash
-unzip nexus-0.1.5-linux-x86_64.zip && cd nexus-0.1.5-linux-x86_64
+unzip nexus-0.1.6-linux-x86_64.zip && cd nexus-0.1.6-linux-x86_64
 chmod +x nexus                       # zip 从 Windows 打包时不带可执行位
 cp .env.example .env && $EDITOR .env      # 至少填 DATABASE_URL
 ./nexus                              # 默认监听 127.0.0.1:8080

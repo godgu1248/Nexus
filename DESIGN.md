@@ -3643,3 +3643,31 @@ assertion `left == right` failed: 只能建出一篇草稿，多出来的就是�
 - 线上（改配置后逐项复测）：`/` 1,665 B、`app.css` 10,253 B、`htmx.min.js` 16,677 B、
   `editor.js` 2,683 B；`/static/` 只剩一条 `Cache-Control` 且三个安全头都在；
   `/` 带 `no-store`；2.5 MB 与 4 MiB 上传均返回 303（到达应用）。
+
+### 38.9 v0.1.6 的发布与镜像
+
+这一版先写完 `release-notes/v0.1.6.md` 再打 tag——§37.8 记的教训在这里第一次生效：
+CI 的 `gh release create --notes-file` 拿到的是真文件，发布页正文不再是自动生成的提交列表。
+
+| 位置 | 文件 | 字节 |
+| --- | --- | --- |
+| 顶层（CI 构建） | nexus-0.1.6-linux-x86_64.tar.gz | 3,725,733 |
+| 顶层 | nexus-0.1.6-linux-x86_64.zip | 3,741,985 |
+| 顶层 | nexus-0.1.6-source.zip | 555,378 |
+| 顶层 | nexus-0.1.6-windows-x86_64.zip | 3,705,433 |
+| local-build（本机 zig） | nexus-0.1.6-linux-x86_64.zip | 3,651,100 |
+| local-build | nexus-0.1.6-source.zip | 555,378 |
+| local-build | nexus-0.1.6-windows-x86_64.zip | 3,691,308 |
+
+下载 CI 资产后用发布页的 `SHA256SUMS.txt` 逐条核对（4/4 `OK`），装到服务器再做一次
+`sha256sum -c`（顶层 + `local-build`），最后从公网 `https://flowrun.cloud/downloads/`
+重新下载重算：**7/7 `OK`，`MIRROR.txt` 693 字节，`FAILURES=0`**。
+
+顺手修掉一个埋了两版的问题：`package.ps1` 写 `SHA256SUMS.txt` 用的是**三列**
+（`哈希 大小 文件名`），Linux 上 `sha256sum -c` 会把"大小 + 文件名"整体当文件名，
+报 `FAILED open or read`；Windows 上 `Get-FileHash` 照常工作，所以本地永远看不出来。
+0.1.4 时是在服务器上手写脚本转成两列补的，这一版改成从源头只写两列
+（`哈希 + 两个空格 + 文件名`），本机与 CI 的校验文件格式从此一致。
+
+改 `package.ps1` 时我又踩了一次同一个坑：**给它加了中文注释，PowerShell 5.1 按 ANSI 解码
+直接报 `Unexpected token '}'`**——这个文件必须保持纯 ASCII（已把注释改成英文并在文件里写明原因）。
