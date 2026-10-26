@@ -723,9 +723,18 @@ async fn lobby_pagination_pages_do_not_overlap() {
             .collect()
     };
 
-    let (page1, _) = page_token(&app, "/lobby", None).await;
-    let (page2, _) = page_token(&app, "/lobby?page=2", None).await;
-    let (page99, _) = page_token(&app, "/lobby?page=99", None).await;
+    // 只在自己的分区里翻页，不去翻 /lobby：那是全站公开议题的合并列表，
+    // 并行用例随时往里插新议题，排序一变，"两页不重叠"就会随机变红——
+    // 这不是页面错了，是断言把"并发插入"误判成了"分页重叠"。
+    // 分页机制（PAGE_SIZE、越界页、排序）在分区页与全站页是同一套代码。
+    let slug = sqlx::query_scalar::<_, String>("SELECT slug FROM forum_spaces WHERE id = ?")
+        .bind(space)
+        .fetch_one(&pool)
+        .await
+        .expect("读分区 slug");
+    let (page1, _) = page_token(&app, &format!("/forum/{slug}"), None).await;
+    let (page2, _) = page_token(&app, &format!("/forum/{slug}?page=2"), None).await;
+    let (page99, _) = page_token(&app, &format!("/forum/{slug}?page=99"), None).await;
 
     let first = collect(&page1);
     let second = collect(&page2);
@@ -806,5 +815,90 @@ impl CurrentUserFixture {
             status: nexus::auth::model::UserStatus::Active,
             group_ids: Vec::new(),
         }
+    }
+}
+
+/// 数据库层面的护栏：同一个用户插第二条 pending 必须被唯一索引挡住。
+///
+/// 这条测试故意**绕过 service**（它有一层"先查再插"的友好提示），直接调 model，
+/// 因为要验的是"两个人同时点按钮"那条路径——服务层的检查在并发下会同时通过。
+/// 迁移 0015 用生成列 + 唯一索引实现：pending 有值、approved/rejected 为 NULL，
+/// NULL 不参与唯一性比较，所以历史记录可以有多条。
+#[tokio::test]
+async fn a_second_pending_join_request_is_rejected_by_the_database() {
+    let Some(url) = db_url() else {
+        println!("跳过：未设置 TEST_DATABASE_URL");
+        return;
+    };
+    let (_app, pool) = harness(&url).await;
+
+    let name = unique("joiner");
+    let user_id = make_user(&pool, &name, "user").await;
+
+    let mut tx = pool.begin().await.expect("开事务");
+    nexus::public::model::create_join_request(
+        &mut tx,
+        nexus::public::model::NewJoinRequest {
+            user_id,
+            message: "我想加入",
+        },
+    )
+    .await
+    .expect("第一条应当成功");
+    tx.commit().await.expect("提交");
+
+    let mut tx = pool.begin().await.expect("开事务");
+    let second = nexus::public::model::create_join_request(
+        &mut tx,
+        nexus::public::model::NewJoinRequest {
+            user_id,
+            message: "我又点了一次",
+        },
+    )
+    .await;
+    drop(tx);
+
+    assert!(
+        matches!(second, Err(nexus::error::AppError::Conflict(_))),
+        "第二条 pending 必须被拒（唯一索引），实际：{second:?}"
+    );
+
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM join_requests WHERE user_id = ? AND status = 'pending'",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("计数");
+    assert_eq!(pending, 1, "库里最终只能有一条 pending");
+}
+
+/// 页面里带着 CSRF token 和"当前是谁"，一律不许被缓存。
+///
+/// 少了这个头，浏览器后退就能看到上一个人登录时的页面；而缓存下来的 token
+/// 在会话轮换后必然失效，用户只会看到"操作失败"，日志里什么都没有。
+#[tokio::test]
+async fn pages_are_marked_no_store() {
+    let Some(url) = db_url() else {
+        println!("跳过：未设置 TEST_DATABASE_URL");
+        return;
+    };
+    let (app, _pool) = harness(&url).await;
+
+    for uri in ["/lobby", "/", "/definitely-missing"] {
+        let response = app
+            .clone()
+            .oneshot(get_request(uri, None))
+            .await
+            .expect("请求失败");
+        let value = response
+            .headers()
+            .get("cache-control")
+            .map(|v| v.to_str().unwrap_or("").to_owned());
+        assert_eq!(
+            value.as_deref(),
+            Some("no-store"),
+            "{uri} 必须带 Cache-Control: no-store"
+        );
     }
 }

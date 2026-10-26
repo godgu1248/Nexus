@@ -451,7 +451,12 @@ pub async fn set_pinned(
     let doc = model::find_doc(pool, id).await?.ok_or(AppError::NotFound)?;
 
     let mut tx = pool.begin().await?;
-    model::set_pinned(&mut tx, id, pinned, order).await?;
+    // 没改动就不写审计：`set_pinned` 的 WHERE 带 `<>` 守卫，重复点同一个按钮会返回 false。
+    // 审计的意义是"谁在什么时候改变了什么"，把无变化也记进去只会让真正的那条更难找。
+    if !model::set_pinned(&mut tx, id, pinned, order).await? {
+        tx.rollback().await?;
+        return Ok(());
+    }
     audit::record(
         &mut tx,
         AuditCtx::new(Some(actor.id), ip),

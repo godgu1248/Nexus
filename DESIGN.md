@@ -3807,3 +3807,97 @@ CI 的 `gh release create --notes-file` 拿到的是真文件，发布页正文�
 已经公网校验过的字节立刻与 Release 脱钩（那正是 §34.6 记录过的"两种字节"问题）。
 代价是"下载源码包的人看不到这一轮的审查记录"——已经在这里说明，且 `main` 上是全的。
 下一个版本（0.1.8 及以后）不会再有这个缺口：先写文档再打 tag。
+
+## 40. 第四轮审查：数据库不变式、缓存头与审计的真实性
+
+前三轮是「代码对不对」（§36/§37）和「写入口能不能被刷」（§39）。这一轮换三个问题：
+
+1. 那些**只在并发下才会破**的规则，究竟写在代码里还是写在库里？
+2. **浏览器会不会把不该留的东西留下**（页面里带着 token 与身份）。
+3. 审计里记下的每一条，**是不是都对应一次真实的改变**。
+
+### 40.1 「先查再插」不是不变式
+
+`public::service::submit_join` 原来的顺序是：查有没有 pending → 没有就插入。
+两个标签页同时点「提交申请」，两条都能通过查询，然后都插入成功。
+
+这不是"概率很低所以算了"的问题：它留下的是**管理员队列里的重复条目**，
+而批准其中一条之后，另一条仍然 pending——用户会一直被告知「你已经有一条待处理申请」，
+而管理员那边看起来什么都没发生。两边都觉得自己没错。
+
+修法是把规则交给数据库（`migrations/0015_join_pending_unique.sql`）：
+
+```sql
+pending_user_id = IF(status = 'pending', user_id, NULL)   -- 生成列（STORED）
+UNIQUE KEY uk_join_pending (pending_user_id)
+```
+
+三个细节：
+
+- **`NULL` 不参与唯一性比较**，所以「一个人可以有很多条 approved/rejected 历史」与
+  「最多一条 pending」能同时成立。这是 MySQL 唯一索引对 NULL 的标准行为，不是巧合。
+- **迁移里先删掉已有的重复 pending**（保留 id 最大的那条）。不清理的话 `ALTER` 会因为
+  违反新索引直接失败，而迁移失败会让新二进制**在启动阶段**拒绝起来——
+  这类故障最难查：进程根本不接请求，日志只有一句 migration failed。
+- 撞唯一索引返回 1062，在 `model::create_join_request` 里翻成 `AppError::Conflict`
+  （和 `group::add_member`、`public::add_like` 用同一套 `MySqlDatabaseError::number()` 判断）。
+  service 层那句"先查"保留——它只是让正常路径的提示更好懂，护栏在库里。
+
+测试故意**绕过 service** 直接调 model 插两次，因为要验的就是"两个人同时点"那条路径：
+服务层的检查在并发下会同时通过。
+
+### 40.2 缓存头：一个 `no-store` 挡掉两类问题
+
+`src/app.rs` 新增 `no_store` 中间件，挂在最外层，给所有响应补 `Cache-Control: no-store`
+（handler 自己声明了就不覆盖）。
+
+两类问题：
+
+- **共享设备上的后退**：登录后的页面（内厅、管理区、审计）被 bfcache 或代理留下，
+  下一个人按后退就看到了。这是真事故，不是"体验问题"。
+- **缓存的 CSRF token 必然失效**：`start_session` 里 `cycle_id()` 会换会话 id，
+  换完之后旧页面上的 token 对不上，用户只看到「操作失败」，而服务端日志里干干净净
+  ——因为请求根本没带着合法会话到达业务代码。
+
+`/static/*` 由 nginx 直出、不经过应用，所以那条一年期的强缓存不受影响；
+`/uploads/*` 同理。这一点必须在文档里写清楚，否则以后有人看到"全站 no-store"
+会以为静态资源也被打掉了缓存。
+
+### 40.3 审计要记「改变」，不是记「点击」
+
+`kb::service::set_pinned` 原来不检查 `model::set_pinned` 的返回值。
+那个 UPDATE 带 `<>` 守卫（`AND (is_pinned <> ? OR pin_order <> ?)`），
+所以重复点同一个按钮本来什么都没改，但审计里还是多了一条 `kb.doc_pin`。
+
+审计的价值在于"能按时间倒着读出一串真实变更"。把无变化的点击也记进去，
+真正那次变更就会淹没在重复条目里。现在没改动就 `rollback` 并返回，
+**不写审计也不报错**（用户的意图已经满足，没什么可失败的）。
+
+### 40.4 一条会随机变红的测试
+
+`lobby_pagination_pages_do_not_overlap` 翻的是 `/lobby`——全站公开议题的合并列表。
+并行用例随时往里插新议题，两页之间只要插入一条，原本在第二页的条目就会挤到第一页，
+"两页不重叠"当场变红。
+
+断言本身没错，错的是**在被别人持续写入的列表上做跨请求的顺序假设**。
+改成翻自己分区（`/forum/{slug}`）的页：分页机制（`PAGE_SIZE`、越界页、排序）
+与全量列表是同一套代码，但数据是这条用例独占的。
+
+这也是本轮唯一的"测试自身缺陷"——和 §37 里 `find-then-insert` 的教训是同一类：
+**并发环境下不能假设两次读之间世界没变。**
+
+### 40.5 验收
+
+- `cargo test` **277 passed / 0 failed**（lib 182 + 14 个集成目标）。
+- 新增：`a_second_pending_join_request_is_rejected_by_the_database`、
+  `pages_are_marked_no_store`（`/lobby`、`/`、404 三条路径）。
+- `clippy --all-targets -- -D warnings` = 0，`cargo fmt --check` = 0。
+- 生产：迁移 0015 随二进制自动执行；`/healthz` 200；`ops/smoke.ps1` 19/19。
+
+### 40.6 记录但没改
+
+- **CSP 仍缺**：加 `Content-Security-Policy` 需要浏览器实机验证 htmx 的内联事件与
+  `hx-*` 属性行为，无浏览器环境里改了等于赌。
+- `bump_view` 每 GET 一次单行 UPDATE；`search_docs` 的 `LIKE '%q%'` 应上全文索引
+  （中文要 `ngram` 解析器）；档案根列表仍不分页（加 LIMIT 会静默藏文档，得先设计导航）。
+- `media` 上传只要求登录、`/tasks` 对来宾 403 而非 404：owner 已明确"不要紧"。

@@ -97,7 +97,35 @@ pub fn build_router(state: AppState) -> Router {
         .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
         .layer(session_layer)
+        // 最外层：每一份响应都不许被缓存（理由见 `no_store` 的文档注释）。
+        .layer(axum::middleware::from_fn(no_store))
         .with_state(state)
+}
+
+/// 给所有响应加 `Cache-Control: no-store`。
+///
+/// 这些页面里带着 CSRF token 与"当前是谁"。让浏览器或中间代理存下来，至少有两个后果：
+/// 后退一次就能看到上一个人登录时的页面（共享电脑上是真事故）；
+/// 缓存的 token 在会话轮换（`cycle_id`）之后必然失效，用户看到的是"操作失败"，
+/// 而真正的原因在服务端日志里什么都没有。
+///
+/// `/static/*` 由 nginx 直出、根本不到这里，所以不会把静态资源的强缓存打掉。
+async fn no_store(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    // 不覆盖 handler 自己声明的策略：真有页面需要别的值，让它自己说。
+    if !response
+        .headers()
+        .contains_key(axum::http::header::CACHE_CONTROL)
+    {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+    }
+    response
 }
 
 /// 健康检查。**刻意不走 [`AppError`]**：探针只认 200/503，统一错误页会把语义糊掉。

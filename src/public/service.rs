@@ -340,9 +340,7 @@ pub async fn submit_join(
         .await?
         .is_some()
     {
-        return Err(AppError::conflict(
-            "你已经有一条待处理的申请了，等管理员看完再说",
-        ));
+        return Err(AppError::conflict(public_model::PENDING_EXISTS_MESSAGE));
     }
 
     let mut tx = pool.begin().await?;

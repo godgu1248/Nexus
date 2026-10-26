@@ -552,6 +552,11 @@ pub async fn find_pending_join_request(
     Ok(id)
 }
 
+/// 同一个人只能有一条待处理申请——这句话在库里由 `uk_join_pending` 保证（迁移 0015）。
+/// service 层的"先查再插"只是把正常路径的提示说得更清楚，真正的护栏是唯一索引：
+/// 两次并发点击都能通过那条检查，但只有一条插得进去。
+pub const PENDING_EXISTS_MESSAGE: &str = "你已经有一条待处理的申请了，等管理员看完再说";
+
 pub async fn create_join_request(
     tx: &mut Transaction<'_, sqlx::MySql>,
     input: NewJoinRequest<'_>,
@@ -562,7 +567,17 @@ pub async fn create_join_request(
     .bind(input.user_id)
     .bind(input.message)
     .execute(&mut **tx)
-    .await?;
+    .await
+    .map_err(|err| match &err {
+        sqlx::Error::Database(db)
+            if db
+                .try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
+                .is_some_and(|e| e.number() == 1062) =>
+        {
+            AppError::conflict(PENDING_EXISTS_MESSAGE)
+        }
+        _ => AppError::from(err),
+    })?;
     Ok(result.last_insert_id())
 }
 
