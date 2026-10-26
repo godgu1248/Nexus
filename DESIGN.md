@@ -4141,3 +4141,23 @@ error(link): unable to spawn C:\zig\zig.exe: NameTooLong
 
 同一个坑在中文正则断言上已经踩过两次（§35.6、§41.11），这次是**字符比较**版本：
 **只要断言里出现非 ASCII，就不要用管道读 curl 的输出。**
+
+### 42.8 镜像（/downloads/）
+
+| 文件 | 字节 |
+| --- | --- |
+| `nexus-0.1.10-linux-x86_64.tar.gz`（CI） | 3,898,509 |
+| `nexus-0.1.10-linux-x86_64.zip`（CI） | 3,916,786 |
+| `nexus-0.1.10-source.zip`（CI） | 623,316 |
+| `nexus-0.1.10-windows-x86_64.zip`（CI） | 3,877,956 |
+| `local-build/nexus-0.1.10-linux-x86_64.zip` | 3,827,002 |
+| `local-build/nexus-0.1.10-source.zip` | 623,316 |
+| `local-build/nexus-0.1.10-windows-x86_64.zip` | 3,872,010 |
+
+公网重下重算 **8/8 OK**（顶层四个 + `local-build/` 三个 + `MIRROR.txt` 标注 0.1.10）。
+
+这一轮拉 CI 资产时遇到 github.com 的 TLS 握手间歇失败（`curl: (35) schannel: failed to receive handshake`，直连与本地代理同时中招）。处置是**退避重试**（6 次、逐次加长），
+而不是逐个换镜像站——同一台机器上十分钟前刚成功过，说明不是线路不通而是抖动。
+如果 `SHA256SUMS.txt` 始终拿不到，脚本会退化成"用下载到的字节现算哈希"并显式打印一行说明，
+避免把本地计算值伪装成上游文件。
+
