@@ -155,14 +155,31 @@ fn prune(map: &mut HashMap<String, Attempt>) {
     map.retain(|_, attempt| attempt.first_seen.elapsed() < ATTEMPT_WINDOW);
 }
 
+/// 计数表到达上限时淘汰最早建立的那四分之一，而不是整体清空。
+///
+/// 整体清空看着简单，但它把**正在被锁的对手也一起放了**：填满 4096 个 key 只需要
+/// 4096 次登录尝试（换着用户名试就行），之后 5 次/5 分钟与 20 次/5 分钟的锁全部归零，
+/// 相当于给了一条"先污染计数表再撞库"的路。按 `first_seen` 淘汰最老的那批，
+/// 既能挡住内存放大，又保留最近这批攻击者的计数。
 fn guard_capacity(map: &mut HashMap<String, Attempt>) {
-    if map.len() >= MAX_TRACKED_KEYS {
-        tracing::warn!(
-            keys = map.len(),
-            "登录失败计数表达到容量上限，整体清空以避免内存放大"
-        );
-        map.clear();
+    if map.len() < MAX_TRACKED_KEYS {
+        return;
     }
+
+    let mut ages: Vec<Instant> = map.values().map(|attempt| attempt.first_seen).collect();
+    ages.sort_unstable();
+    let victims = ages.len() / 4;
+    let Some(cutoff) = ages.get(victims.saturating_sub(1)).copied() else {
+        return;
+    };
+
+    let before = map.len();
+    map.retain(|_, attempt| attempt.first_seen > cutoff);
+    tracing::warn!(
+        keys = map.len(),
+        evicted = before.saturating_sub(map.len()),
+        "登录失败计数表到达容量上限，淘汰最早的一批"
+    );
 }
 
 /// 还要等多久才能再试。`None` 表示没被锁。
@@ -582,6 +599,42 @@ mod tests {
         assert!(phc.starts_with("$argon2id$"), "必须是 argon2id：{phc}");
         assert!(verify_password("correct horse battery staple", &phc));
         assert!(!verify_password("wrong password!", &phc));
+    }
+
+    /// 计数表满了不能让"正在被锁的人"也跟着解锁。
+    ///
+    /// 换着用户名试 4096 次就能把表填满；如果这时整体清空，攻击者对同一个账号的
+    /// 5 次锁定与对同一 IP 的 20 次锁定全部归零——那就等于给了一条免费重置的路。
+    #[test]
+    fn capacity_guard_evicts_the_oldest_quarter_instead_of_wiping_everything() {
+        let mut map: HashMap<String, Attempt> = HashMap::new();
+        let base = Instant::now();
+        for index in 0..MAX_TRACKED_KEYS {
+            map.insert(
+                format!("k{index}"),
+                Attempt {
+                    count: 1,
+                    first_seen: base + Duration::from_millis(index as u64),
+                },
+            );
+        }
+
+        guard_capacity(&mut map);
+
+        assert!(
+            map.len() < MAX_TRACKED_KEYS,
+            "超限时必须真的腾出空间，否则下一次插入又会触发清扫"
+        );
+        assert!(
+            map.len() >= MAX_TRACKED_KEYS - MAX_TRACKED_KEYS / 4 - 1,
+            "只该淘汰四分之一，不能连带把最近的计数一起扔掉：{}",
+            map.len()
+        );
+        assert!(
+            map.contains_key(&format!("k{}", MAX_TRACKED_KEYS - 1)),
+            "最新的一条必须留下，否则攻击者只要把表填满就能重新开始"
+        );
+        assert!(!map.contains_key("k0"), "最早的一条应该被淘汰");
     }
 
     /// 注入形状的口令按普通字符处理：口令从不拼进 SQL，全部走绑定参数。

@@ -3336,3 +3336,37 @@ MySQL 8.0.46 的优化器能正确处理这种写法。
 - musl 静态二进制 7,689,096 B，sha256 `2b99e86f1811760ca9c1293a9d3c3361978d1955ce703bfc319ce530b7f61ac5`，
   已部署（`systemctl restart nexus` → `active`），日志只有一条「数据库迁移已完成」（迁移 14 条全 success）。
 - 线上 `ops/smoke.ps1` **19/19**；生产 `audit_logs` 上 `idx_audit_created (created_at, id)` 已存在。
+
+### 36.7 部署复核时又抓到两处
+
+审完第一轮、部署上去之后又核了一遍代码与线上状态，多出两处：
+
+#### 36.7.1 登录失败计数表"满了就清空"是个锁绕过口子
+
+`src/auth/service.rs::guard_capacity` 原本在 key 数达到 `MAX_TRACKED_KEYS = 4096` 时
+**整体 `map.clear()`**。看着是"防止内存放大"，实际是把**正在被锁的人一起放了**：
+
+- 攻击者换着用户名试 4096 次就能把表填满（每次尝试只是一次 argon2 校验）；
+- 一满就整体清空 → 对目标账号的「5 次/5 分钟」与对自己 IP 的「20 次/5 分钟」**同时归零**；
+- 于是"先污染计数表，再撞库"变成一条稳定的绕过路径。
+
+改法：到达上限时按 `first_seen` 淘汰**最早的四分之一**，而不是清空。内存照样有界，
+但最近这批攻击者的计数留着——被锁的人不会因为别人填表而解锁。
+
+测试 `capacity_guard_evicts_the_oldest_quarter_instead_of_wiping_everything` 钉住三条：
+腾出了空间、只淘汰约四分之一、最新的一条必须还在、最早的一条必须被淘汰。
+
+#### 36.7.2 改了 CSS 却没换版本号
+
+`templates/layout.html` 里静态资源是「文件名不变 + `?v=` 版本号」，而 nginx 对 `/static/*`
+发一年 `immutable`。这次加了 `color-mix` 回退却没有改 `v=`，等于**老访客一年都拿不到这份修复**。
+
+已改成 `app.css?v=20261026`，并把注释写清楚：发版时只改**改动过那个文件**的版本号，
+三个一起换只会让用户白下没变的文件。
+
+### 36.8 最终验证
+
+- `cargo test` **258 passed / 0 failed**（lib 171 + 12 个集成目标），clippy `-D warnings` = 0，`fmt --check` = 0。
+- musl 静态二进制 7,695,400 B，sha256 `ece0ed9b234e9acf67348864d9571ef04d19c25646e6bf0c55d1b7994f647ec1`，
+  已部署（`active`，日志一条「数据库迁移已完成」）。
+- 线上 `ops/smoke.ps1` **19/19**；页面里 `app.css?v=20261026` 已生效（老访客下次请求会拿到新 URL）。

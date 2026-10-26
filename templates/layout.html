@@ -30,8 +30,9 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   {%- endif %}
   {# 静态资源走"文件名不变 + 查询串版本号"：nginx 对 /static/* 发一年 immutable 缓存，
-     改样式必须换 URL，否则老访问者一年看不到新版。发版时只改这里的 v= 值。 #}
-  <link rel="stylesheet" href="{{ static_base }}/app.css?v=20261024">
+     改样式必须换 URL，否则老访问者一年看不到新版。发版时只改**改动过那个文件**的 v= 值，
+     不必三个一起换——换没改动的那两个只是让用户白下一遍。 #}
+  <link rel="stylesheet" href="{{ static_base }}/app.css?v=20261026">
   {%- block head %}{% endblock %}
 </head>
 <body class="theme-{{ look.theme }} bg-{{ look.backdrop }} font-{{ look.font }}" data-theme="{{ look.theme }}" data-backdrop="{{ look.backdrop }}" data-font="{{ look.font }}">
