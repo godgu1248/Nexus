@@ -3901,3 +3901,28 @@ UNIQUE KEY uk_join_pending (pending_user_id)
 - `bump_view` 每 GET 一次单行 UPDATE；`search_docs` 的 `LIKE '%q%'` 应上全文索引
   （中文要 `ngram` 解析器）；档案根列表仍不分页（加 LIMIT 会静默藏文档，得先设计导航）。
 - `media` 上传只要求登录、`/tasks` 对来宾 403 而非 404：owner 已明确"不要紧"。
+
+### 40.7 发布与镜像（0.1.8）
+
+| 文件 | 字节 | 来源 |
+| --- | --- | --- |
+| `nexus-0.1.8-linux-x86_64.tar.gz` | 3,727,723 | CI |
+| `nexus-0.1.8-linux-x86_64.zip` | 3,745,787 | CI |
+| `nexus-0.1.8-source.zip` | 580,977 | CI |
+| `nexus-0.1.8-windows-x86_64.zip` | 3,700,933 | CI |
+| `local-build/nexus-0.1.8-linux-x86_64.zip` | 3,655,060 | 本机 zig |
+| `local-build/nexus-0.1.8-source.zip` | 580,977 | 本机 |
+| `local-build/nexus-0.1.8-windows-x86_64.zip` | 3,699,196 | 本机 |
+
+- CI 四个包下载后与 Release 的 `SHA256SUMS.txt` 逐条 `OK`（`ci_bad=0`）。
+- 镜像 `MIRROR.txt` 693 B；公网重下重算：顶层 4 个 + `local-build/` 3 个全 `OK`、`FAILURES=0`。
+- 生产：二进制 7,678,472 B / sha256 `4da75049…`，迁移 **15/15 success**，
+  `uk_join_pending non_unique=0`、`pending_user_id STORED GENERATED`，`/healthz` 200，smoke 19/19。
+
+### 40.8 这轮踩的坑
+
+**PowerShell 函数的参数个数不会报错，只会静默错位**：
+`Fetch "/downloads/$prefix" 'SHA256SUMS.txt' $sumsOut` 传了三个参数给两参函数，
+第三个被丢弃、`$out` 收下了字符串 `'SHA256SUMS.txt'`，于是文件写到了当前目录，
+后面 `Get-Content $sumsOut` 报 `Cannot find path ...\sums-top.txt`——
+错误信息指向"文件没找到"，真因是"参数传错"。函数调用一律把路径先拼成一个字符串再传。
