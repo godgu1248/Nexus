@@ -28,6 +28,41 @@
     return el;
   }
 
+  // 上传失败说人话。
+  //
+  // 服务器返回的是内置错误页（一整页 HTML），直接塞进 alert 是一堵墙；而最常见的那种失败
+  // 根本没有响应——nginx 收不下请求体时会直接断连接，浏览器只给一个
+  // "TypeError: Failed to fetch"。用户看到的就是"连接失败"，但真正的原因是文件超过了
+  // 网关上限。所以这里按状态码和大类翻译：
+  function describeFailure(status, text) {
+    if (status === 413) {
+      return "文件太大，被网关挡下了。图片上限 4 MB、Word 文档上限 8 MB。";
+    }
+    if (status === 401 || status === 403) {
+      return "登录状态过期了，刷新页面重新登录再试。";
+    }
+    if (status === 422) {
+      return "这个文件读不了：请确认它是真正的 Word 文档或图片，且没有损坏。";
+    }
+    if (status === 429) {
+      return "上传太频繁了，等几分钟再试。";
+    }
+    if (status >= 500) {
+      return "服务端处理失败（" + status + "），这不是你的操作问题，稍后再试或告诉管理员。";
+    }
+    // 其它 4xx：服务端给了具体原因（纯文本），取第一段有效信息，别把整页 HTML 丢给用户。
+    var plain = (text || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    if (plain.length > 120) plain = plain.slice(0, 120) + "…";
+    return plain || ("上传失败（" + status + "）");
+  }
+
+  function describeNetwork(err) {
+    if (err && err.name === "TypeError") {
+      return "连接中断，服务端没收到完整文件。多半是文件接近或超过上限（图片 4 MB、Word 8 MB），也可能是网络不稳，换小一点的文件或重试一次。";
+    }
+    return (err && err.message) || "未知错误";
+  }
+
   function setup(root) {
     var surface = root.querySelector("[data-surface]");
     var hidden = root.querySelector("[data-html]");
@@ -139,7 +174,7 @@
           .then(function (response) {
             if (!response.ok) {
               return response.text().then(function (text) {
-                throw new Error(text || "上传失败（" + response.status + "）");
+                throw new Error(describeFailure(response.status, text));
               });
             }
             return response.json();
@@ -152,7 +187,7 @@
             insertNode(img);
           })
           .catch(function (err) {
-            window.alert("图片上传失败：" + err.message);
+            window.alert("图片上传失败：" + describeNetwork(err));
           });
       });
     }
@@ -197,7 +232,7 @@
           .then(function (response) {
             if (!response.ok) {
               return response.text().then(function (text) {
-                throw new Error(text || "上传失败（" + response.status + "）");
+                throw new Error(describeFailure(response.status, text));
               });
             }
             return response.json();
@@ -207,7 +242,7 @@
             insertDocEmbed(data.url, data.title);
           })
           .catch(function (err) {
-            window.alert("Word 上传失败：" + err.message);
+            window.alert("Word 上传失败：" + describeNetwork(err));
           });
       });
     }

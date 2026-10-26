@@ -4211,3 +4211,75 @@ error(link): unable to spawn C:\zig\zig.exe: NameTooLong
   而这在所有"服务起来了/首页 200"的检查里都是绿的。
 - **校验和只有"覆盖被校验对象"才有意义**。并发发布下每个 run 都只保证自己那份，
   聚合出来的发布页就可能是混合物；要么串行，要么发完回读。
+
+## 44. 「提示连接失败」真因：两条上限没对齐，加上一个头把自己拦住了
+
+### 44.1 现象与取证
+
+owner 报「提示连接失败」，附的截图 7×12 像素，等于没有信息量。所以先取证，不猜：
+
+| 证据 | 结论 |
+| --- | --- |
+| `/healthz` `/` `/login` `/notice/dot` 全 200（0.12–0.14s），`systemctl is-active nexus` = active | 站点没挂 |
+| `journalctl -u nexus` 21:39 之后只有一条 `possibly suspicious activity: record not found in store`（会话过期级），无 panic、无 500 | Rust 侧没报错 |
+| `access.log` 21:40:26 `POST /media/docx` → **200**，referrer `/kb/new`，UA Edge 156 | 文档上传这一步成功了 |
+| `error.log` 21:40:17 `client intended to send too large body: 2621440 bytes … `POST /media/upload`` | 2.5 MiB 的图片被 **nginx** 拒绝，而且它不发 413 页，直接断连接 |
+| `nginx -T` 显示 `client_max_body_size 5m`，但 `nexus.conf` 的 mtime 是 21:41:35，worker 也是那一刻重启的 | 21:40 时生效的还是上一版 2m |
+
+浏览器拿到的不是响应，是断开的连接——`fetch` 抛 `TypeError: Failed to fetch`，
+`editor.js` 把 `err.message` 原样弹出来，于是用户看到「Word 上传失败：Failed to fetch」，
+读成「连接失败」。
+
+### 44.2 第二个真因：`X-Frame-Options DENY` 把自家查看器挡了
+
+站内 Word 查看器的形状是 `<figure class="doc-embed"><iframe src="/doc/<sha>" sandbox="">`
+（`static/editor.js` 的 `insertDocEmbed`）。而 `X-Frame-Options: DENY` 连**同一来源**的
+iframe 也禁止——浏览器在那个框里显示「flowrun.cloud 拒绝连接」。**上传成功之后**才出现的错误，
+和 access log 里那条 200 完全吻合。
+
+改动要动两处，只改一处没用：
+
+- server 级 `DENY` → `SAMEORIGIN`；
+- `location /` 里那条也 → `SAMEORIGIN`。**location 里只要出现任何 `add_header`，
+  就不再继承 server 级的 `add_header`**，所以这一层是独立的。
+
+跨站依旧不能嵌，点击劫持的防护没丢，只是同一来源之间互相允许。
+
+### 44.3 三层上限必须对齐
+
+| 层 | 值 | 位置 |
+| --- | --- | --- |
+| nginx | **9m** | `deploy/nginx.conf` 的 `client_max_body_size` |
+| 应用请求体 | max(8 MiB, 4 MiB) + 64 KiB | `src/media/routes.rs` 的 `DefaultBodyLimit` |
+| 业务规则 | 图片 4 MiB、docx 8 MiB | `src/media/service.rs`、`src/shared/docx.rs` |
+
+历史是 2m → 5m → 9m，**两次都是同一类错**：调了业务上限却没调网关。
+最坑的是它的失败方式——不是干净的 413，而是断连接，日志里连「413」这个字都没有。
+
+### 44.4 错误信息也是接口
+
+`static/editor.js` 新增两个翻译器：
+
+- `describeFailure(status, text)`：413 → 点名两类上限；401/403 → 登录过期；422 → 文件读不了；
+  429 → 太频繁；5xx → 不是你的操作问题；其余 4xx 取服务端文案第一段有效信息（剥 HTML）。
+- `describeNetwork(err)`：`TypeError` → 「连接中断，多半是文件接近上限」。
+
+原来的写法把服务端整页 HTML 或 `Failed to fetch` 直接丢进 alert——**用户读不懂的字，
+等于没有错误处理**。
+
+### 44.5 验收
+
+- `cargo test` **194 passed**（lib，模板改动不影响集成用例）；`clippy -D warnings` / `fmt --check` 均 0。
+- 线上：`curl -D -` 打 `/doc/<sha>` 返回 `X-Frame-Options: SAMEORIGIN`；
+  `POST /media/docx` 6 MiB → **303**（到达应用层，不再是网关断连）；
+  `ops/smoke.ps1` **20/20**；`/static/editor.js?v=20261030` 含 `describeFailure`/`describeNetwork`。
+- musl 静态二进制 7,974,416 B，`PT_INTERP=none`。
+
+### 44.6 教训
+
+- **安全头要看"自己的页面怎么用自己"**。DENY 是防护，也是自伤：先问一句"本站有没有
+  iframe / object / embed 指向本站"。
+- **网关与应用的限制是同一件事的两半**，写在两个文件里就会漂移。要么在一处定义、另一处引用
+  （注释里点名对方的常量），要么在验收里打一条「大于业务上限、小于网关上限」的请求。
+- **排查顺序**：先看日志能定位到"哪一个请求、哪一层拒绝的"，再看代码。这次两分钟就在
+  `error.log` 里找到了 `client intended to send too large body`——比读一小时 JS 有用。
