@@ -14,6 +14,17 @@ on:
 permissions:
   contents: write
 
+# 同一个 tag 只允许一个发布在跑；重打/移动 tag 时直接取消前一次。
+#
+# 为什么必须要有：v0.1.11 打 tag 时我先把 tag 指错了 commit，删除重建又推了一次，
+# 于是两个 run 同时在往同一个 Release 上传。`--clobber` 让后到的覆盖先到的，
+# 但两个 run 各自的 SHA256SUMS.txt 只描述自己那一份——结果发布页上出现
+# `nexus-0.1.11-linux-x86_64.zip` 与它的校验和**不匹配**（另外三个是好的），
+# 也就是"校验和证明不了任何东西"。并发控制是根治点。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -155,6 +166,22 @@ jobs:
           else
             publish --generate-notes
           fi
+      - name: 校对已上传的资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -eu
+          # 从"发布出来的东西"回读，而不是相信本地文件。
+          #
+          # v0.1.11 的教训：两个 run 并发上传同一个 Release，`--clobber` 让资产各来自不同
+          # 的构建，而每个 run 的 SHA256SUMS.txt 只描述自己那份——发布页上的 zip 与它的
+          # 校验和不匹配，`sha256sum -c` 必然失败，但流水线当时是绿的。
+          # 这里把四个包全部下载回来按 SHA256SUMS.txt 校验，不一致就让 job 变红。
+          mkdir -p verify && cd verify
+          gh release download "$TAG" --pattern '*.zip' --pattern '*.tar.gz' --pattern 'SHA256SUMS.txt' --clobber
+          ls -l
+          sha256sum -c SHA256SUMS.txt
       - name: 回读校验
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
