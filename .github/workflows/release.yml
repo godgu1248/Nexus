@@ -143,29 +143,47 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          set -eu
-          # Release 标题/正文优先用仓库里的 release-notes（显式 UTF-8 读，避免中文乱码）
+          # 每一步都 tee 到日志；失败时把日志塞进 job summary。
+          #
+          # 为什么：Actions 的原始日志需要 token 才能读，而 summary 是公开可读的。
+          # v0.1.12 的发布步骤红过一次，当时只能看到"发布"变红、看不到 gh 的报错，
+          # 白等了一轮。把错误留在 summary 里，下一次不用再猜。
+          set -u
+          LOG="$(mktemp)"
+          exec > >(tee -a "$LOG") 2>&1
+          set -x
+
+          fail() {
+            set +x
+            {
+              echo "### 发布失败"
+              echo '```'
+              tail -n 60 "$LOG"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          trap fail ERR
+
+          set -e
           TITLE="Nexus 枢纽 $TAG"
           if [ -f "release-notes/$TAG.title" ]; then TITLE="$(cat "release-notes/$TAG.title")"; fi
+          NOTES_ARG="--generate-notes"
+          if [ -f "release-notes/$TAG.md" ]; then NOTES_ARG="--notes-file release-notes/$TAG.md"; fi
 
-          # 两条路径都要在"Release 已存在"时也能把标题与正文改过来。
-          #
-          # 早先的写法是 `gh release create ... || gh release upload "$TAG" ... --clobber`：
-          # create 失败（Release 已存在）后只上传资产，标题与正文永远停在第一次发布的样子。
-          # 结果就是 v0.1.4 / v0.1.5 的发布页正文是 GitHub 自动生成的提交列表——
-          # 因为 release-notes 是打完 tag 之后才补进仓库的，第一次 create 时文件还不存在。
-          # 现在失败分支改成 create-or-edit：先尝试 create，失败就 edit 标题与正文，再 clobber 资产。
-          publish() {
-            gh release create "$TAG" --title "$TITLE" "$@" assets/* && return 0
-            gh release edit "$TAG" --title "$TITLE" "$@" || true
+          echo "assets in workspace:"; ls -l assets
+          COUNT=$(ls -1 assets | wc -l)
+          if [ "$COUNT" -lt 5 ]; then echo "assets 不够：$COUNT"; exit 1; fi
+
+          # create 会连带上传资产；Release 已存在时退化成 edit + clobber 上传。
+          # shellcheck disable=SC2086
+          if ! gh release create "$TAG" --title "$TITLE" $NOTES_ARG assets/*; then
+            echo "create 失败，改走 edit + upload"
+            gh release edit "$TAG" --title "$TITLE" $NOTES_ARG || true
             gh release upload "$TAG" assets/* --clobber
-          }
-
-          if [ -f "release-notes/$TAG.md" ]; then
-            publish --notes-file "release-notes/$TAG.md"
-          else
-            publish --generate-notes
           fi
+
+          set +x
+          gh release view "$TAG" --json name,tagName,assets
       - name: 校对已上传的资产
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
