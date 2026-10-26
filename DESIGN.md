@@ -4161,3 +4161,53 @@ error(link): unable to spawn C:\zig\zig.exe: NameTooLong
 如果 `SHA256SUMS.txt` 始终拿不到，脚本会退化成"用下载到的字节现算哈希"并显式打印一行说明，
 避免把本地计算值伪装成上游文件。
 
+
+## 43. 两处界面缺陷的真因，与一次"校验和证不了任何东西"的发布
+
+### 43.1 「点击 Word 没反应」＝ 服务端在发旧脚本
+
+按钮在 `templates/shared/editor.html` 里，被 Askama 编译进二进制，所以新二进制一部署按钮就出现了；
+点击处理写在 `static/editor.js` 里，而 `ops/deploy-ui.ps1` **只推 `app.css`**。
+实测两地哈希：服务器 `5daff431…`、本地 `fde528f6…`——服务器上是支持 docx 之前那一版。
+
+页面引用的 URL 是 `?v=20261027`，nginx 对 `/static/*` 发一年 `immutable`，
+于是浏览器与服务器都认为"没变"。**按钮在、处理器不在，点它当然没反应。**
+
+处置：
+
+| 改动 | 理由 |
+| --- | --- |
+| `deploy-ui.ps1` 推 `app.css` / `app.js` / `editor.js` 并逐个核对远端 sha256 | 只检查"服务 active"永远发现不了陈旧静态资源；哈希不一致直接让部署失败 |
+| `smoke.ps1` 增加内容断言「线上 editor.js 必须含 `data-docx`」 | HTTP 200 只证明文件在，不证明文件是新的 |
+| 三处 `?v=` 统一升到 20261029 | 换 URL 才能让老访客重新取一次 |
+
+### 43.2 「公告」比别的导航项宽 ＝ 空槽位也占宽度
+
+红点槽位 `.nav-dot-slot` 是 `inline-block`、宽 `0.55rem` + 左 `0.3rem`；零未读时服务端返回的正是
+**空槽位** `<span id="notice-dot" class="nav-dot-slot"></span>`（无子节点）。它没有内容却照样占位，
+「公告」因此比相邻项宽出约 13px——截图里那个不均匀的间距就是它。
+
+修法：`.nav-dot-slot:empty { display: none; }`。有红点时仍占位（那是应该占的），没有时完全不参与排版。
+
+### 43.3 顺带查出来的一次坏发布：v0.1.11 的校验和对不上
+
+给 v0.1.11 打 tag 时我先指错了 commit，删除重建又推了一次 → **两个 workflow run 同时往同一个 Release 上传**。
+`gh release upload --clobber` 让后到的覆盖先到的，但每个 run 的 `SHA256SUMS.txt` 只描述自己那一份，
+于是发布页上 `nexus-0.1.11-linux-x86_64.zip` 与它的校验和不匹配（另外三个是好的），
+而流水线当时是**绿的**——`sha256sum -c` 在用户那边才失败。
+
+处置：
+
+- `concurrency: group: release-${{ github.ref }}, cancel-in-progress: true`——同一个 tag 只允许一个发布在跑；
+- 发布后新增「校对已上传的资产」：`gh release download` 把四个包拉回来按 `SHA256SUMS.txt` 校验，不一致让 job 变红。
+  **相信"发布出来的东西"，不相信本地文件。**
+
+修复后重建 tag 触发一次干净发布：四个资产与 `SHA256SUMS.txt` 逐条一致（`bad=0`），
+镜像 `/downloads/` 换新并公网重下重算 **8/8 OK**。
+
+### 43.4 教训
+
+- **静态资源是部署的一部分**，不是构建的副产品。少推一个 `.js`，页面上的按钮就会"存在但没用"，
+  而这在所有"服务起来了/首页 200"的检查里都是绿的。
+- **校验和只有"覆盖被校验对象"才有意义**。并发发布下每个 run 都只保证自己那份，
+  聚合出来的发布页就可能是混合物；要么串行，要么发完回读。
