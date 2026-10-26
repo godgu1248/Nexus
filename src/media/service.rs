@@ -245,7 +245,16 @@ pub async fn save_docx(
         });
     }
 
-    let parsed = crate::shared::docx::parse_docx(data)?;
+    // 解析放在阻塞线程池：一份 8 MB 的 docx 解出来是几十 MB 的 XML，解析是纯 CPU 活，
+    // 直接在 async worker 上跑会把这台 2 vCPU 机器的其它请求一起卡住。
+    //
+    // 图片用 `Skip`：落库路径不写图片，解出来只会白烧最多 256 MB 内存。
+    let owned = data.to_vec();
+    let parsed = tokio::task::spawn_blocking(move || {
+        crate::shared::docx::parse_docx_with(&owned, crate::shared::docx::ImagePolicy::Skip)
+    })
+    .await
+    .map_err(|err| AppError::internal(anyhow::anyhow!("Word 解析任务异常结束：{err}")))??;
     // 标题优先级：core.xml 的 dc:title → 正文第一段（解析器已填）→ 上传文件名。
     // 三者都可能拿到空串，所以判空要在最后一步，长度也在这里收口（列宽 200）。
     let title = {

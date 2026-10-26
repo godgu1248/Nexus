@@ -59,7 +59,23 @@ pub struct ParsedDocx {
 
 /// 解析一份 docx。任何结构问题都退化成"能读多少读多少"，只有
 /// "不是 docx / 正文缺失 / 太大" 才报错。
+///
+/// 默认把内嵌图片解出来（测试与将来"导入图片"用）。落库路径应该用
+/// [`ImagePolicy::Skip`]——那里根本不写图片，解压出来只是白烧内存。
 pub fn parse_docx(bytes: &[u8]) -> Result<ParsedDocx, AppError> {
+    parse_docx_with(bytes, ImagePolicy::Collect)
+}
+
+/// 内嵌图片怎么处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagePolicy {
+    /// 解出图片字节（最多 32 张、每张 8 MB，全在内存里）。
+    Collect,
+    /// 只标注"这里有一张图"，不解压、不占内存。
+    Skip,
+}
+
+pub fn parse_docx_with(bytes: &[u8], policy: ImagePolicy) -> Result<ParsedDocx, AppError> {
     if bytes.is_empty() {
         return Err(AppError::unprocessable("这个文件是空的"));
     }
@@ -98,7 +114,7 @@ pub fn parse_docx(bytes: &[u8]) -> Result<ParsedDocx, AppError> {
     let core_title = read_part(&mut archive, "docProps/core.xml", 1024 * 1024)?
         .and_then(|xml| parse_core_title(&xml));
 
-    let images = collect_images(&mut archive, &rels, &mut notes)?;
+    let images = collect_images(&mut archive, &rels, &mut notes, policy)?;
 
     // rel id -> 图片下标
     let mut image_by_rel: HashMap<String, usize> = HashMap::new();
@@ -108,7 +124,13 @@ pub fn parse_docx(bytes: &[u8]) -> Result<ParsedDocx, AppError> {
         }
     }
 
-    let body = parse_body(&document_xml, &numbering, &image_by_rel, &mut notes)?;
+    let body = parse_body(
+        &document_xml,
+        &numbering,
+        &image_by_rel,
+        &mut notes,
+        policy == ImagePolicy::Skip,
+    )?;
 
     let html = richtext::sanitize(&body.html).into_string();
     let html = clamp_html(&html);
@@ -168,7 +190,17 @@ fn collect_images(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
     rels: &HashMap<String, String>,
     notes: &mut Vec<&'static str>,
+    policy: ImagePolicy,
 ) -> Result<Vec<PendingImage>, AppError> {
+    // 不解图就早点返回：解压 32 张 8 MB 的图会吃掉最多 256 MB 常驻内存，
+    // 而落库路径根本不写图片——那是纯粹的白烧。
+    if policy == ImagePolicy::Skip {
+        if rels.values().any(|target| has_image_ext(target)) {
+            notes.push("文档里的图片没有导入，查看器里以〔图片〕标注");
+        }
+        return Ok(Vec::new());
+    }
+
     // 先收集名字，再逐个读：`by_name` 要 &mut archive，不能在遍历名字时同时持有。
     let mut names: Vec<String> = Vec::new();
     for index in 0..archive.len() {
@@ -503,6 +535,8 @@ struct Body {
 struct Walker<'a> {
     numbering: &'a HashMap<String, bool>,
     images: &'a HashMap<String, usize>,
+    /// 图片字节没有解出来：正文里用「〔图片〕」占位，而不是 `{{img:N}}`。
+    images_skipped: bool,
     notes: &'a mut Vec<&'static str>,
 
     html: String,
@@ -540,10 +574,12 @@ fn parse_body(
     numbering: &HashMap<String, bool>,
     images: &HashMap<String, usize>,
     notes: &mut Vec<&'static str>,
+    images_skipped: bool,
 ) -> Result<Body, AppError> {
     let mut walker = Walker {
         numbering,
         images,
+        images_skipped,
         notes,
         html: String::new(),
         text: String::new(),
@@ -681,7 +717,10 @@ impl<'a> Walker<'a> {
             }
             "blip" => {
                 if let Some(rel) = attr_value(event, "embed") {
-                    if let Some(index) = self.images.get(&rel) {
+                    if self.images_skipped {
+                        // 不解图的那条路径：给一个可见的占位，别让 `{{img:N}}` 漏到页面上。
+                        self.para_runs.push_str("<span>〔图片〕</span>");
+                    } else if let Some(index) = self.images.get(&rel) {
                         self.para_runs.push_str(&format!("{{{{img:{index}}}}}"));
                     } else {
                         self.note("文档里有图片引用了不存在的资源，已跳过");
@@ -1013,6 +1052,33 @@ mod tests {
         assert_eq!(parsed.images.len(), 1);
         assert_eq!(parsed.images[0].ext, "png");
         assert_eq!(parsed.images[0].bytes.len(), png.len());
+    }
+
+    #[test]
+    fn skipping_images_marks_them_instead_of_leaking_placeholders() {
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let doc = wrap(
+            r#"<w:p><w:r><w:t>看图：</w:t></w:r><w:r><w:drawing><a:blip r:embed="rId7"/></w:drawing></w:r></w:p>"#,
+        );
+        let parsed = parse_docx_with(
+            &build_docx(&doc, None, &[("word/media/image1.png", png)]),
+            ImagePolicy::Skip,
+        )
+        .unwrap();
+        // 落库路径不写图片：既不留 `{{img:N}}` 给用户看，也不占内存解图。
+        assert_eq!(parsed.html, "<p>看图：<span>〔图片〕</span></p>");
+        assert!(parsed.images.is_empty());
+        assert!(
+            parsed.notes.iter().any(|note| note.contains("〔图片〕")),
+            "{:?}",
+            parsed.notes
+        );
     }
 
     #[test]

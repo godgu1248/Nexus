@@ -4070,3 +4070,74 @@ error(link): unable to spawn C:\zig\zig.exe: NameTooLong
 
 `ops/verify-docx.ps1` **13/13 PASS**（连跑两次结果一致）：登录页有 CSRF、登录 303、上传返回 `/doc/<64 hex>`、查看器含标题文字、加粗渲染成 `<b>`、普通 run 保留、列表渲染成 `<ul>`、容器带 `word-view`、未知 sha 404、非 docx 422。`ops/smoke.ps1` **19/19**。
 
+
+## 42. 第五轮审查：Word 解析的内存账与漏出来的占位符
+
+### 42.1 这一轮看的是什么
+
+上一轮的 Word 功能是"能跑通"，这一轮回头看它在生产上最坏会怎样。两个发现都在同一条路径上：
+`media::service::save_docx` 调用 `docx::parse_docx`，然后**只用** `title` / `html` / `notes`。
+
+### 42.2 发现一：图片被解出来，然后扔掉
+
+`collect_images` 会把 `word/media/` 下的图片逐张 `read_to_end` 到内存，上限是
+`MAX_IMAGES = 32` × `MAX_IMAGE_BYTES = 8 MiB` = **256 MiB**。而 `save_docx` 从来没用过
+`parsed.images`——它只是把 `{{img:N}}` 占位留在 HTML 里。
+
+生产机 `MemoryMax=700M`、物理内存 1.6 GB。一份带 32 张照片的 8 MB 文档，上传时峰值内存
+可以抬到 256 MiB 以上（还要加上解压出的 32 MB XML 与净化后的 HTML）。两个人同时上传
+就足够让 systemd 按内存上限把服务杀掉——这不是"慢一点"，是整站重启。
+
+### 42.3 发现二：`{{img:N}}` 会原样显示给用户
+
+既然图片不导入，占位符就没有任何东西去替换它。查看器的渲染路径是
+"取 `media.html` → `richtext::sanitize` → 输出"，`{{img:0}}` 是纯文本，会被原样印在页面上。
+任何带图片的 Word 文档都会在正文里露出 `{{img:0}}`、`{{img:1}}`。
+
+这两个问题是同一个原因的两种表现：**占位符机制是为"导入图片"准备的，而这条路本轮没走通，
+却把中间的占位状态漏给了用户。**
+
+### 42.4 处置
+
+1. `docx` 新增 `pub enum ImagePolicy { Collect, Skip }` 与 `parse_docx_with(bytes, policy)`；
+   `parse_docx(bytes)` 保持 `Collect`（测试与将来的导入功能用）。
+2. `ImagePolicy::Skip` 时 `collect_images` **立刻返回**，连 `word/media/` 的条目名都不扫，
+   只在 `rels` 里发现图片引用时记一条提示："文档里的图片没有导入，查看器里以〔图片〕标注"。
+3. `Walker` 增加 `images_skipped: bool`：遇到 `a:blip` 时输出 `<span>〔图片〕</span>`，
+   而不是 `{{img:N}}`。`span` 在白名单里，净化后仍然保留，用户看到的是一句人话。
+4. `save_docx` 改用 `ImagePolicy::Skip`，并把解析整体搬进 `tokio::task::spawn_blocking`：
+   解一份 8 MB 的 docx 是纯 CPU 活（几十 MB XML 的状态机扫描），留在 async worker 上会把这台
+   2 vCPU 机器的其它请求一起卡住。代价是 `data.to_vec()` 一次 8 MB 拷贝，换回"请求线程不被占用"。
+
+### 42.5 验收
+
+- `shared::docx` 单测 **8 条全绿**，新增
+  `skipping_images_marks_them_instead_of_leaking_placeholders`：断言
+  `parse_docx_with(..., Skip).html == "<p>看图：<span>〔图片〕</span></p>"`、`images.is_empty()`、
+  `notes` 里有一条含〔图片〕的提示。
+- `cargo test` **293 passed / 0 failed**（lib 194 + 14 个集成目标）；`clippy -D warnings` = 0；
+  `fmt --check` = 0。
+- musl 静态二进制 **7,974,416 B / sha256 `8e068c101d8cfa64a61cbca7d4509cc8fd573bfc839f0f856880065321e860a9`**，
+  `PT_INTERP=none`；`ops\deploy-ui.ps1` 部署后 `active`、`/healthz` 200。
+- 线上：`ops\smoke.ps1` **19/19**、`ops\verify-docx.ps1` **13/13**（原有 13 条全部仍然通过）、
+  新增 `ops\verify-docx-image.ps1` **11/11**——构造一份内嵌 1×1 PNG 的 docx 上传，断言
+  查看器里出现〔图片〕、**不**出现 `{{img:`、**不**出现 `src="data:`、上传响应带 note。
+
+### 42.6 没改的
+
+- 图片仍然不导入。要做就得给 `media` 加"子资源"概念（一张图一个 sha 一行），
+  并且上传一次要写 33 个文件——那是独立一轮的事，不夹在审查里做。
+- 查看器仍然不要求登录（知道 sha 就能看），与 `/uploads/` 图片自洽，已记在 §41.10。
+- 表头合并只做单层折算，已知。
+
+### 42.7 排错教训：PowerShell 管道会把 UTF-8 解成 OEM
+
+新脚本第一次跑，`viewer shows the picture placeholder` 报 FAIL，但同一份响应里
+"没有 `{{img:`" 却是 PASS——说明页面是对的，是**我的断言读错了**。
+
+原因：`& curl ... ` 的 stdout 交给 PowerShell 时按控制台 OEM 代码页解码，`〔图片〕`
+（U+3014/56FE/7247）变成乱码，`Contains` 自然不成立。改成 `-o 文件` + `[System.IO.File]::ReadAllText`
+（UTF-8）后一次通过。
+
+同一个坑在中文正则断言上已经踩过两次（§35.6、§41.11），这次是**字符比较**版本：
+**只要断言里出现非 ASCII，就不要用管道读 curl 的输出。**
