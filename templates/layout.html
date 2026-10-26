@@ -32,7 +32,7 @@
   {# 静态资源走"文件名不变 + 查询串版本号"：nginx 对 /static/* 发一年 immutable 缓存，
      改样式必须换 URL，否则老访问者一年看不到新版。发版时只改**改动过那个文件**的 v= 值，
      不必三个一起换——换没改动的那两个只是让用户白下一遍。 #}
-  <link rel="stylesheet" href="{{ static_base }}/app.css?v=20261027">
+  <link rel="stylesheet" href="{{ static_base }}/app.css?v=20261029">
   {%- block head %}{% endblock %}
 </head>
 <body class="theme-{{ look.theme }} bg-{{ look.backdrop }} font-{{ look.font }}" data-theme="{{ look.theme }}" data-backdrop="{{ look.backdrop }}" data-font="{{ look.font }}">
@@ -62,7 +62,7 @@
 
   {# 静态文件由 nginx 直出，Rust 进程不挂 /static 路由。 #}
   <script src="{{ static_base }}/htmx.min.js" defer></script>
-  <script src="{{ static_base }}/app.js?v=20261027" defer></script>
-  <script src="{{ static_base }}/editor.js?v=20261027" defer></script>
+  <script src="{{ static_base }}/app.js?v=20261029" defer></script>
+  <script src="{{ static_base }}/editor.js?v=20261029" defer></script>
 </body>
 </html>

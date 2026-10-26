@@ -1084,6 +1084,13 @@ body.font-mono .card p { max-width: 68ch; }
   vertical-align: super;
 }
 
+/* 没有红点时不能占位：inline-block 即使空着也会撑出 0.55rem + 0.3rem，
+   "公告"就比别的导航项宽出一截（截图里那个不均匀的间距）。服务端在零未读时
+   返回的正是 `<span id="notice-dot" class="nav-dot-slot"></span>`——无子节点，:empty 命中。 */
+.nav-dot-slot:empty {
+  display: none;
+}
+
 .nav-dot {
   position: absolute;
   inset: 0;
