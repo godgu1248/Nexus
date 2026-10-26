@@ -41,6 +41,13 @@ pub async fn upload(
         .map(str::to_owned);
     middleware::require_csrf(&session, token.as_deref()).await?;
 
+    // 上传会落盘：4 MiB × 不限次数 = 把 40 GB 磁盘填满。
+    // 键用用户 id（登录是硬前置），额度按人算。
+    state.rate.guard(
+        crate::shared::ratelimit::Kind::Upload,
+        &format!("u{}", current.id),
+    )?;
+
     let mut payload: Option<Vec<u8>> = None;
     while let Some(field) = multipart
         .next_field()

@@ -1,7 +1,7 @@
-//! 应用共享状态：连接池 + 配置。
+//! 应用共享状态：连接池 + 配置 + 限速器。
 //!
-//! 只放"只读或可安全共享"的东西。任何可变状态都不要往这里塞——内存 session 由中间件管，
-//! 登录失败计数在 auth 模块内部，各自负责自己的并发正确性。
+//! 只放"可安全共享"的东西。限速器内部有锁，但对外只是 `Arc`，
+//! 它按应用实例一份——测试各建各的，互不干扰。
 
 use std::sync::Arc;
 
@@ -9,11 +9,14 @@ use axum::extract::FromRef;
 use sqlx::MySqlPool;
 
 use crate::config::Config;
+use crate::shared::ratelimit::{Limiter, Rules};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: MySqlPool,
     pub config: Arc<Config>,
+    /// 写入口的频率限制（注册/上传/评论/投稿）。
+    pub rate: Arc<Limiter>,
 }
 
 impl AppState {
@@ -21,7 +24,15 @@ impl AppState {
         Self {
             pool,
             config: Arc::new(config),
+            rate: Arc::new(Limiter::new(Rules::default())),
         }
+    }
+
+    /// 换一套限速规则。测试用它把上限压到个位数，
+    /// 免得"验证 429"要先打满生产额度。
+    pub fn with_rate_rules(mut self, rules: Rules) -> Self {
+        self.rate = Arc::new(Limiter::new(rules));
+        self
     }
 
     pub fn is_prod(&self) -> bool {

@@ -17,6 +17,7 @@ use sqlx::{MySqlPool, Row, Transaction};
 
 use crate::auth::policy::{self, CurrentUser};
 use crate::error::AppError;
+use crate::shared::sql::escape_like;
 use crate::shared::visibility::Visibility;
 
 /// 完整文档行（含正文）。
@@ -626,19 +627,4 @@ pub async fn search_docs(
         .map(card_from_row)
         .collect::<Result<Vec<_>, _>>()?;
     Ok((items, total))
-}
-
-/// 让用户输入的字面 `%` / `_` 不再被当成通配符。
-fn escape_like(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '\\' | '%' | '_' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
 }

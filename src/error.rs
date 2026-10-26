@@ -48,8 +48,8 @@ pub enum AppError {
     #[error("无法处理：{0}")]
     Unprocessable(Cow<'static, str>),
 
-    #[error("请求过于频繁")]
-    RateLimited,
+    #[error("请求过于频繁：{retry_after_secs} 秒后可再试")]
+    RateLimited { retry_after_secs: u32 },
 
     #[error("模板渲染失败：{0}")]
     Template(#[from] AskamaError),
@@ -88,7 +88,7 @@ impl AppError {
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AppError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             AppError::Template(_) | AppError::Database(_) | AppError::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -106,7 +106,11 @@ impl AppError {
             AppError::NotFound => Cow::Borrowed("页面不存在，或者已经被移走了。"),
             AppError::MethodNotAllowed => Cow::Borrowed("这个地址不支持该请求方式。"),
             AppError::PayloadTooLarge => Cow::Borrowed("提交的内容太大了。"),
-            AppError::RateLimited => Cow::Borrowed("操作太频繁，请稍后再试。"),
+            AppError::RateLimited { retry_after_secs } => {
+                // 给一个"能照做的"时间：写 47 秒没人会等，按分钟向上取整。
+                let minutes = (*retry_after_secs as u64).div_ceil(60).max(1);
+                Cow::Owned(format!("操作太频繁，请 {minutes} 分钟后再试。"))
+            }
             AppError::Template(_) | AppError::Database(_) | AppError::Internal(_) => {
                 Cow::Borrowed("服务内部错误，请稍后重试。")
             }
@@ -151,7 +155,15 @@ impl IntoResponse for AppError {
         }
 
         let html = render_error_page(status, &self.public_message());
-        (status, Html(html)).into_response()
+        let mut resp = (status, Html(html)).into_response();
+        // `Retry-After` 是给客户端（和脚本）看的：光在页面上写"请 5 分钟后再试"，
+        // 程序不知道要等多久，只会立刻重试。
+        if let AppError::RateLimited { retry_after_secs } = self
+            && let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string())
+        {
+            resp.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        resp
     }
 }
 
@@ -266,7 +278,10 @@ mod tests {
             StatusCode::UNPROCESSABLE_ENTITY
         );
         assert_eq!(
-            AppError::RateLimited.status_code(),
+            AppError::RateLimited {
+                retry_after_secs: 60,
+            }
+            .status_code(),
             StatusCode::TOO_MANY_REQUESTS
         );
         assert_eq!(

@@ -14,6 +14,7 @@ use sqlx::{MySqlPool, Row};
 use crate::auth::model::{Role, UserStatus};
 use crate::error::AppError;
 use crate::shared::pagination::{PAGE_SIZE, Page, PageQuery};
+use crate::shared::sql::escape_like;
 
 /// 成员列表的一行。
 #[derive(Debug, Clone)]
@@ -121,13 +122,17 @@ pub async fn list_audit(
 ) -> Result<Page<AuditRow>, AppError> {
     let offset = page.page.saturating_sub(1).saturating_mul(PAGE_SIZE);
     let action = filter.action.as_deref();
+    // 动作筛选是"前缀"语义（`user.` 能筛出全部用户相关动作）。用户输入里的
+    // `%` 与 `_` 必须先转义，否则 `_` 会被 LIKE 当成"任意一个字符"，
+    // 筛 `u_er` 会把 `user…` 也捞出来——筛选结果对不上，用户会以为审计缺了记录。
+    let action_pattern = action.map(escape_like);
     let target_type = filter.target_type.as_deref();
 
     let rows = sqlx::query(
         "SELECT a.id, a.actor_id, a.action, a.target_type, a.target_id, a.ip, a.created_at \
            FROM audit_logs a \
           WHERE (? IS NULL OR a.actor_id = ?) \
-            AND (? IS NULL OR a.action LIKE CONCAT(?, '%')) \
+            AND (? IS NULL OR a.action LIKE CONCAT(?, '%') ESCAPE '\\\\') \
             AND (? IS NULL OR a.target_type = ?) \
             AND (? IS NULL OR a.target_id = ?) \
             AND (? IS NULL OR a.created_at >= ?) \
@@ -138,7 +143,7 @@ pub async fn list_audit(
     .bind(filter.actor_id)
     .bind(filter.actor_id)
     .bind(action)
-    .bind(action)
+    .bind(action_pattern.as_deref())
     .bind(target_type)
     .bind(target_type)
     .bind(filter.target_id)
@@ -160,7 +165,7 @@ pub async fn list_audit(
     let total: u64 = sqlx::query_scalar(
         "SELECT CAST(COUNT(*) AS UNSIGNED) FROM audit_logs a \
           WHERE (? IS NULL OR a.actor_id = ?) \
-            AND (? IS NULL OR a.action LIKE CONCAT(?, '%')) \
+            AND (? IS NULL OR a.action LIKE CONCAT(?, '%') ESCAPE '\\\\') \
             AND (? IS NULL OR a.target_type = ?) \
             AND (? IS NULL OR a.target_id = ?) \
             AND (? IS NULL OR a.created_at >= ?) \
@@ -169,7 +174,7 @@ pub async fn list_audit(
     .bind(filter.actor_id)
     .bind(filter.actor_id)
     .bind(action)
-    .bind(action)
+    .bind(action_pattern.as_deref())
     .bind(target_type)
     .bind(target_type)
     .bind(filter.target_id)

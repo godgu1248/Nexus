@@ -286,6 +286,15 @@ pub async fn register_submit(
     }
 
     let ip = ip_of(&headers, &state, Some(&connect_info));
+
+    // 注册要限速：每次注册是一次 argon2（19 MiB 内存 + 两次迭代），
+    // 不限速的话它就是一个不用登录就能触发的 CPU 消耗点。
+    // 键用出口 IP——注册时还没有身份可用。
+    state.rate.guard(
+        crate::shared::ratelimit::Kind::Register,
+        ip.as_deref().unwrap_or("-"),
+    )?;
+
     let input = RegisterInput {
         username: form.username.trim(),
         email: form.email.trim(),

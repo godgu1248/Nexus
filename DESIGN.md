@@ -3671,3 +3671,75 @@ CI 的 `gh release create --notes-file` 拿到的是真文件，发布页正文�
 
 改 `package.ps1` 时我又踩了一次同一个坑：**给它加了中文注释，PowerShell 5.1 按 ANSI 解码
 直接报 `Unexpected token '}'`**——这个文件必须保持纯 ASCII（已把注释改成英文并在文件里写明原因）。
+
+## 39. 第三轮审查：写入口限速与 LIKE 元字符
+
+这一轮换了两个角度：**"谁都能反复点的那几个按钮"** 和 **"用户输入进到 SQL 模式串里的地方"**。
+两处都是"代码本身没错、行为也符合规格"，但站在运维和正确性上看是漏的。
+
+### 39.1 只有登录做了限速，其余写入口是敞开的
+
+`auth::service` 里那套"5 次/5 分钟 + 20 次/5 分钟"是给登录用的，
+它防的是撞库。但下面四个入口当时只有"登录 + CSRF"，没有任何频率限制：
+
+| 入口 | 当时的风险 | 现在 |
+| --- | --- | --- |
+| `POST /register` | 每次注册是一次 argon2（19 MiB 内存、两次迭代）——**不用登录就能触发的 CPU 消耗点**，也是灌库通道 | 每个出口 IP 20 次/小时 |
+| `POST /media/upload` | 4 MiB × 不限次数 = 把 40 GB 磁盘填满；内容寻址能去重**相同**图片，挡不住随机噪声图 | 每个用户 120 次/小时 |
+| `POST /lobby/{forum,kb}/{id}/comments` | 评论无上限，前台页面会被刷爆 | 每个用户 120 次/小时 |
+| `POST /lobby/submit` | 投稿直接进管理员的待审队列，灌满就淹掉真投稿 | 每个用户 20 次/小时 |
+
+### 39.2 限速器放在 `AppState` 里，不放全局静态
+
+`src/shared/ratelimit.rs` 的 `Limiter` 由 `AppState` 持有（`Arc`）。
+好处不是省内存，是**测试隔离**：每个用例自己 `build_router` 就自带一份干净计数器，
+不需要 `#[cfg(test)]` 的"清空全局"后门，也不会有"两个用例互相把对方额度吃光"。
+登录那套仍在 `auth::service` 里——它的键要带用户名、失败还要写审计，两件事不该合并。
+
+判断与计数在同一把锁里完成。先查后记的话，二十个并发请求会同时看到"还没超限"
+——这和 `admin` 里"先查后改"是同一类错误（见 §37.3）。
+
+窗口按小时：这些动作的正常用量是**按天**算的（一天传十几张图、发几条评论），
+用分钟窗口会让"挑完图一次性贴五张"撞墙，而小时窗口对脚本刷量依然有效。
+
+### 39.3 429 要说清"等多久"
+
+`AppError::RateLimited` 从单元变体改成带 `retry_after_secs`：
+
+- 页面文案从"操作太频繁，请稍后再试"变成"操作太频繁，请 N 分钟后再试"（按分钟向上取整，47 秒写成 1 分钟）；
+- 响应带 `Retry-After` 头——**程序不知道"稍后"是多久，只会立刻重试**。
+
+### 39.4 键的选择
+
+注册用**出口 IP**（还没有身份可用；`client_ip` 只认 `X-Real-IP` 与 XFF 末段，见 §37.2，
+所以伪造头无效）；上传/评论/投稿用**用户 id**（登录是硬前置）。
+测试里专门验了"另一个 IP 不被连累"和"另一个人不被连累"——
+键要是写成全局，一个人的额度用完会拦住所有人。
+
+### 39.5 `LIKE` 的模式元字符没被转义
+
+`src/admin/model.rs` 的审计动作筛选是 `a.action LIKE CONCAT(?, '%')`：
+用户输入里的 `_` 是**通配符**，筛 `user_role_change` 会把 `user.role_change` 一起捞出来。
+管理员看到的是"筛选没生效"或"审计里混进了别的动作"，而这两种结论都会让人不再信任审计页。
+
+修法：把 `kb::model` 里那份私有的 `escape_like` 提到 `src/shared/sql.rs`（两边共用一份），
+两处 SQL 都加 `ESCAPE '\\'`。`\` 本身也要转义——否则用户输入 `\%` 会反过来把 `%` 变回通配符。
+
+### 39.6 验收
+
+- `cargo test` **275 passed / 0 failed**（lib 182 + 13 个集成目标），其中新增：
+  - `shared::ratelimit` 5 条单测（额度、键隔离、0 上限全拒、窗口过期、淘汰保留四分之三）；
+  - `tests/ratelimit_flow.rs` 4 条（注册 429 + `Retry-After`、换 IP 不受影响、评论按人计、上传按人计）；
+  - `tests/admin_flow.rs::audit_action_filter_treats_underscore_as_a_literal`；
+  - `shared::sql` 3 条单测。
+- `clippy --all-targets -- -D warnings` 与 `fmt --check` 均 0。
+- 生产：musl 静态二进制 7,665,848 B / sha256 `51fb4613…`，`/healthz` 200，`ops/smoke.ps1` **19/19**。
+  429 这条路径由集成测试证明（把 `Rules::uniform(2)` 塞进 router），**不在生产上打满 20 次注册**去验收。
+
+### 39.7 两个过程中踩到的坑
+
+1. `cargo test` 报 `found invalid metadata files for crate test` / `found staticlib askama_macros instead of rlib`
+   ——不是代码问题，是上一轮被中断的编译把 `target/` 里的产物写坏了；
+   `cargo clean -p nexus` 后 20 秒重编即恢复。
+2. 忘记设 `TEST_DATABASE_URL` 时，`admin_flow` 的 12 条会在 **0.00 秒**内全挂：
+   `harness` 连不上库直接 panic。看到"全挂且耗时为 0"应该先查环境变量，而不是查业务逻辑。

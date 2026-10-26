@@ -510,6 +510,12 @@ pub async fn submit_submit(
         })?
         .clone();
 
+    // 投稿进的是管理员的待审队列，不限速等于让队列可以被灌满。
+    state.rate.guard(
+        crate::shared::ratelimit::Kind::Submission,
+        &format!("u{}", current.id),
+    )?;
+
     match service::submit(
         &state.pool,
         &current,
@@ -626,6 +632,11 @@ pub async fn thread_comment(
         })?
         .clone();
 
+    state.rate.guard(
+        crate::shared::ratelimit::Kind::Comment,
+        &format!("u{}", current.id),
+    )?;
+
     service::comment(
         &state.pool,
         &current,
@@ -655,6 +666,11 @@ pub async fn doc_comment(
             next: format!("/lobby/kb/{id}"),
         })?
         .clone();
+
+    state.rate.guard(
+        crate::shared::ratelimit::Kind::Comment,
+        &format!("u{}", current.id),
+    )?;
 
     service::comment(
         &state.pool,

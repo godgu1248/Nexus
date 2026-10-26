@@ -226,7 +226,9 @@ async fn audit_count_for(pool: &MySqlPool, action: &str, actor_id: u64) -> i64 {
 }
 
 async fn audit_meta(pool: &MySqlPool, action: &str, max_id: u64) -> Vec<String> {
-    sqlx::query_scalar(
+    // `meta` 列允许 NULL（有些动作没有细节可记），`CAST(NULL AS CHAR)` 还是 NULL。
+    // 按 `String` 解就会整条用例 panic——这里显式允许空，再滤掉。
+    let rows: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT CAST(meta AS CHAR) FROM audit_logs \
           WHERE action = ? AND id <= ? ORDER BY id DESC LIMIT 5",
     )
@@ -234,7 +236,8 @@ async fn audit_meta(pool: &MySqlPool, action: &str, max_id: u64) -> Vec<String> 
     .bind(max_id)
     .fetch_all(pool)
     .await
-    .expect("查审计 meta 失败")
+    .expect("查审计 meta 失败");
+    rows.into_iter().flatten().collect()
 }
 
 async fn max_audit_id(pool: &MySqlPool) -> u64 {
@@ -613,6 +616,41 @@ async fn audit_filters_narrow_the_rows() {
     assert!(
         !filtered.contains("auth.login"),
         "按 actor+action 筛过之后不该还混进登录记录"
+    );
+}
+
+/// `LIKE` 前缀筛选里的 `_` 必须被当成字面量。
+///
+/// 不加 `ESCAPE` 时 `_` 匹配任意单个字符：筛 `user_role_change` 会把
+/// `user.role_change` 一起捞出来——管理员看到的就是"筛选没生效"，
+/// 或者更糟，"审计里混进了别的动作"。
+#[tokio::test]
+async fn audit_action_filter_treats_underscore_as_a_literal() {
+    let url = db_url();
+    let (app, pool) = harness(&url).await;
+    let admin_name = unique("audus");
+    make_user(&pool, &admin_name, Role::Admin, UserStatus::Active).await;
+    let cookie = login(&app, &admin_name).await;
+
+    // 两条动作长度相同、只差一个字符；数据库是共享的，所以自己造，不依赖别人。
+    sqlx::query(
+        "INSERT INTO audit_logs (actor_id, action, target_type, target_id) \
+         VALUES (NULL, 'user.role_change', 'user', 1), (NULL, 'user_role_change', 'user', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("插入审计失败");
+
+    let filtered =
+        body_of(get(&app, "/admin/audit?action=user_role_change", Some(&cookie)).await).await;
+
+    assert!(
+        filtered.contains("user_role_change"),
+        "字面量那一条必须命中"
+    );
+    assert!(
+        !filtered.contains("user.role_change"),
+        "`_` 被当成通配符了：筛 user_role_change 不该捞出 user.role_change"
     );
 }
 
