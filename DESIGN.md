@@ -3743,3 +3743,30 @@ CI 的 `gh release create --notes-file` 拿到的是真文件，发布页正文�
    `cargo clean -p nexus` 后 20 秒重编即恢复。
 2. 忘记设 `TEST_DATABASE_URL` 时，`admin_flow` 的 12 条会在 **0.00 秒**内全挂：
    `harness` 连不上库直接 panic。看到"全挂且耗时为 0"应该先查环境变量，而不是查业务逻辑。
+
+### 39.8 发布与镜像（0.1.7）
+
+| 文件 | 字节 | 来源 |
+| --- | --- | --- |
+| `nexus-0.1.7-linux-x86_64.tar.gz` | 3,720,408 | CI（GitHub Actions） |
+| `nexus-0.1.7-linux-x86_64.zip` | 3,735,052 | CI |
+| `nexus-0.1.7-source.zip` | 571,754 | CI |
+| `nexus-0.1.7-windows-x86_64.zip` | 3,688,057 | CI |
+| `SHA256SUMS.txt` | 379 | CI |
+| `local-build/nexus-0.1.7-linux-x86_64.zip` | 3,644,979 | 本机 zig 交叉编译 |
+| `local-build/nexus-0.1.7-source.zip` | 571,754 | 本机 |
+| `local-build/nexus-0.1.7-windows-x86_64.zip` | 3,694,112 | 本机 |
+
+- CI 四个包下载后与 Release 页的 `SHA256SUMS.txt` 逐条 `OK`（`bad=0`）。
+- 镜像装完 `MIRROR.txt` 693 B，公网重下重算：顶层 4 个 + `local-build/` 3 个全 `OK`，`FAILURES=0`。
+
+### 39.9 这轮踩的两个坑
+
+1. **重命名脚本只替换了三个 token，漏了安装器文件名**。
+   `run-016.sh` 里最后一行是 `sh /root/install-016.sh`——`install-016.sh` 既不含
+   `stage016`、也不含 `dl-016`、也不含 `0.1.6`，所以生成 `run-017.sh` 时它原样留下了。
+   现象不是报错，而是"装完还是 0.1.6"：它跑了上一轮的安装器，而 `/tmp/stage016`
+   恰好还没被清理。教训：**改完立刻 grep 裸编号**（`grep -E '016|0\.1\.6'`），
+   而不是 grep 自己替换过的那几个词——那等于用答案验证答案。
+2. **PowerShell 5.1 不支持三元运算符**：`$x = $c ? 'a' : 'b'` 报
+   `Unexpected token '?'`。写 `if/else`，别硬套 C 语法。
