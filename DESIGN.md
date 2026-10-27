@@ -4504,3 +4504,27 @@ error: UnableToSpawnSelf
   不该在没要求的时候悄悄改画质。
 - **没有做体积上限的二次压缩**：一张 2400×1600 的截图压完仍有 190 KB 是合理的；
   要更小只能降质量或降分辨率，那属于"有损"的另一侧。
+
+### 46.7 这次发版遇到的网络故障与处置
+
+镜像同步要的是 GitHub Release 上的资产。这一次两条链路同时坏：
+
+- **开发机**：`github.com:443` 直接连是 `connection reset`，走本地代理是 `schannel: failed to receive handshake`；
+  但 `api.github.com` 返回 **200**、`objects.githubusercontent.com` 也能解析。
+- **服务器**：`curl -I https://github.com` 直接 `Timeout`（10 s），一个字节都下不来。
+  之前能跑通，所以 0.1.14 第一次的下载脚本卡在 windows zip 的 2.5 MB 上，`curl` 没有 `--max-time`
+  就永远挂着——脚本"正在运行"，实际不会结束。
+
+处置分三步，每一步都留下可复用的东西：
+
+1. **给下载加超时与重试**，并把丢文件改成可续传（`curl -C -`）+ 按 sha256 判定是否需要重下：
+   重复执行同一个安装脚本会从前一次的位置继续，而不是从头再来。
+2. **换传输通道**：`api.github.com` 通，就用它取资产字节——
+   `GET /repos/{owner}/{repo}/releases/assets/{id}` 加 `Accept: application/octet-stream`
+   会 302 到签名过的 `objects.githubusercontent.com`，绕开不可达的 `github.com`。
+   这不是鉴权技巧，是同一份资产的另一条官方路径。
+3. **装完仍然按 sha256 校验**：上传通道变了，校验不能变。四份 CI 资产逐条 `OK` 之后才落进
+   `/opt/nexus/downloads/`。
+
+教训写在这里，因为下次还会遇到：**"下载卡住"与"下载失败"是两种故障，症状一样但处置相反**——
+前者要超时+续传，后者要换通道。这次两者都发生了，所以超时、续传、换通道三件一起上。
