@@ -366,3 +366,129 @@ async fn an_unknown_sha_in_the_viewer_is_404() {
         .expect("请求失败");
     assert_eq!(malformed.status(), StatusCode::NOT_FOUND);
 }
+
+/// 一份 1×1 的 PNG：够过魔数校验（解析器只比前 8 字节），也够小。
+const PNG_1X1: &[u8] = &[
+    0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H', b'D', b'R',
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0A, b'I', b'D', b'A', b'T', 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, b'I', b'E', b'N', b'D', 0xAE,
+    0x42, 0x60, 0x82,
+];
+
+/// 带一张内嵌图片的 docx。
+fn build_docx_with_image() -> Vec<u8> {
+    let document = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<w:body>
+<w:p><w:r><w:t xml:space="preserve">看图：</w:t></w:r>
+<w:r><w:drawing><a:blip r:embed="rId5"/></w:drawing></w:r></w:p>
+</w:body>
+</w:document>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+</Relationships>"#;
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="png" ContentType="image/png"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default();
+    writer
+        .start_file("[Content_Types].xml", options)
+        .expect("写入 content types 失败");
+    writer
+        .write_all(content_types.as_bytes())
+        .expect("写入 content types 失败");
+    writer
+        .start_file("word/document.xml", options)
+        .expect("写入 document.xml 失败");
+    writer
+        .write_all(document.as_bytes())
+        .expect("写入 document.xml 失败");
+    writer
+        .start_file("word/_rels/document.xml.rels", options)
+        .expect("写入 rels 失败");
+    writer.write_all(rels.as_bytes()).expect("写入 rels 失败");
+    writer
+        .start_file("word/media/image1.png", options)
+        .expect("写入图片失败");
+    writer.write_all(PNG_1X1).expect("写入图片失败");
+    writer.finish().expect("收尾 docx 失败").into_inner()
+}
+
+/// 内嵌图片必须真的被导入成正文里的 `<img src="/uploads/…">`。
+///
+/// 之前落库路径用 `ImagePolicy::Skip`，图片一律变成「〔图片〕」占位。改成就地展开正文之后
+/// 这条路走不通了：一份以截图为主的文档，正文里全是「〔图片〕」，等于没转换。
+#[tokio::test]
+async fn an_embedded_picture_is_imported_and_linked_inline() {
+    let Some(url) = require_db() else {
+        println!("跳过：未设置 TEST_DATABASE_URL");
+        return;
+    };
+    let (app, pool) = harness(&url).await;
+    let username = unique("img");
+    make_user(&pool, &username, "member").await;
+    let cookie = login(&app, &username).await;
+    let (html, cookie) = page_token(&app, "/", Some(&cookie)).await;
+    let csrf = csrf_of(&html).expect("首页应有 CSRF token");
+
+    let response = app
+        .clone()
+        .oneshot(docx_request(
+            "/media/docx",
+            &build_docx_with_image(),
+            &cookie,
+            &csrf,
+        ))
+        .await
+        .expect("请求失败");
+    let status = response.status();
+    let body = body_of(response).await;
+    assert_eq!(status, StatusCode::OK, "上传应当成功，实际响应：{body}");
+
+    let json: serde_json::Value = serde_json::from_str(&body).expect("响应应当是 JSON");
+    let inline = json["html"]
+        .as_str()
+        .expect("响应里应有 html（编辑器就地插入用）");
+    assert!(inline.contains("看图"), "正文应当带上文字，实际 {inline}");
+    assert!(
+        inline.contains("<img src=\"/uploads/"),
+        "图片应当换成本站地址，实际 {inline}"
+    );
+    assert!(
+        !inline.contains("{{img:"),
+        "占位符不能漏到正文里，实际 {inline}"
+    );
+
+    // 图片不只是写进了正文，还要在媒体表里有一行——`/uploads/` 由 nginx 直出，
+    // 这里没有 nginx，所以查库证明"文件真的被登记过"，而不是只拼了个字符串。
+    let start = inline.find("/uploads/").expect("应有 /uploads/ 地址");
+    let rest = &inline[start..];
+    let end = rest.find('"').expect("地址应当以引号结束");
+    let src = &rest[..end];
+    let sha = src
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.split('.').next())
+        .expect("地址应当形如 /uploads/<sha>.png")
+        .to_owned();
+    assert_eq!(sha.len(), 64, "文件名应当是 sha256，实际 {src}");
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM media WHERE sha256 = ?")
+        .bind(&sha)
+        .fetch_optional(&pool)
+        .await
+        .expect("查 media 失败");
+    assert_eq!(
+        kind.as_deref(),
+        Some("image"),
+        "图片应当作为 image 入库：{src}"
+    );
+}

@@ -193,10 +193,17 @@ fn human_size(bytes: usize) -> String {
 /// 一个已经落盘的 Word 文档。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredDoc {
-    /// 查看器地址（`/doc/{sha256}`）。
+    /// 查看器地址（`/doc/{sha256}`）——现在只当"在新标签页看原文"的入口。
     pub viewer_url: String,
     pub sha256: String,
     pub title: String,
+    /// 净化后的正文 HTML，图片已经换成 `/uploads/<sha>.<ext>` 的真实地址。
+    ///
+    /// 编辑器拿到它**就地插入**正文，不再套一层 iframe 查看器：套 iframe 等于把
+    /// 我们自己的导航栏、页脚一起塞进文档里，读者看到的是"一个网页里嵌了另一个网页"，
+    /// 而不是"一段文档"。就地展开之后，正文段落、标题、表格、图片与站内其它内容
+    /// 用同一套排版规则，读起来才和本地打开一致。
+    pub html: String,
     pub bytes: u32,
     /// 内容已存在（没有重新解析，也没有新增 media 行）。
     pub reused: bool,
@@ -238,7 +245,11 @@ pub async fn save_docx(
         return Ok(StoredDoc {
             viewer_url,
             sha256: sha,
-            title: existing.title.unwrap_or_else(|| default_title(file_name)),
+            title: existing
+                .title
+                .clone()
+                .unwrap_or_else(|| default_title(file_name)),
+            html: existing.html.clone().unwrap_or_default(),
             bytes: existing.bytes,
             reused: true,
             notes: Vec::new(),
@@ -248,10 +259,12 @@ pub async fn save_docx(
     // 解析放在阻塞线程池：一份 8 MB 的 docx 解出来是几十 MB 的 XML，解析是纯 CPU 活，
     // 直接在 async worker 上跑会把这台 2 vCPU 机器的其它请求一起卡住。
     //
-    // 图片用 `Skip`：落库路径不写图片，解出来只会白烧最多 256 MB 内存。
+    // 图片按 `Collect` 收下来：正文要就地展开成普通内容，图片必须跟着一起进来，
+    // 否则"像本地看一样"就是一句空话。总量由解析器封顶（单张 8 MiB、合计 24 MiB），
+    // 所以这里的内存上界是确定的 24 MiB，而不是"32 × 8 MiB"那种乘法幻觉。
     let owned = data.to_vec();
     let parsed = tokio::task::spawn_blocking(move || {
-        crate::shared::docx::parse_docx_with(&owned, crate::shared::docx::ImagePolicy::Skip)
+        crate::shared::docx::parse_docx_with(&owned, crate::shared::docx::ImagePolicy::Collect)
     })
     .await
     .map_err(|err| AppError::internal(anyhow::anyhow!("Word 解析任务异常结束：{err}")))??;
@@ -273,6 +286,41 @@ pub async fn save_docx(
     }
 
     let mut tx = pool.begin().await?;
+
+    // 图片与文档在同一个事务里入库：任何一步失败都不会留下"正文引用了不存在的图"。
+    // 落盘是内容寻址的（同一个 sha 只有一个文件），重复上传同一份文档不会多出文件。
+    let mut html = parsed.html.clone();
+    for (index, image) in parsed.images.iter().enumerate() {
+        let image_sha = sha256_hex(&image.bytes);
+        let file_on_disk = format!("{image_sha}.{}", image.ext);
+        if !dir.join(&file_on_disk).exists() {
+            write_atomically(&dir, &file_on_disk, &image.bytes).await?;
+        }
+        model::insert_media(
+            &mut tx,
+            model::NewMedia {
+                sha256: &image_sha,
+                ext: image.ext,
+                mime: image.mime,
+                bytes: image.bytes.len() as u32,
+                kind: "image",
+                title: None,
+                html: None,
+                uploader_id: actor.id,
+            },
+        )
+        .await?;
+        let src = format!("{}/{file_on_disk}", config.upload_base_url);
+        html = html.replace(
+            &format!("{{{{img:{index}}}}}"),
+            &format!(r#"<img src="{src}" alt="" loading="lazy" decoding="async">"#),
+        );
+    }
+    // 换完占位符再过一次净化：拼进去的 `<img>` 是我们自己生成的，但"落库的 html 一定
+    // 过过 sanitize"这条不变式比"这次拼得对"更值得守——将来谁在这里多拼一个属性，
+    // 第二次净化会把它吃掉，而不是让它在正文里活到线上。
+    let html = crate::shared::richtext::sanitize(&html).into_string();
+
     let uploader = model::NewMedia {
         sha256: &sha,
         ext: "docx",
@@ -280,7 +328,7 @@ pub async fn save_docx(
         bytes: data.len() as u32,
         kind: "docx",
         title: Some(&title),
-        html: Some(&parsed.html),
+        html: Some(&html),
         uploader_id: actor.id,
     };
     let (media_id, inserted) = model::insert_media(&mut tx, uploader).await?;
@@ -307,6 +355,7 @@ pub async fn save_docx(
         viewer_url,
         sha256: sha,
         title,
+        html,
         bytes: data.len() as u32,
         reused: !inserted,
         notes: parsed

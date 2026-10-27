@@ -30,6 +30,12 @@ const MAX_DOCUMENT_XML: u64 = 32 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 /// 内嵌图片张数的上限：再多的话正文已经不是"文档"了。
 const MAX_IMAGES: usize = 32;
+/// 内嵌图片**合计**解压后的上限。
+///
+/// 单张有 8 MiB 的限额，但 32 张 × 8 MiB = 256 MiB 会把 1.6 GB 的机器按进 swap。
+/// 图片现在会真的落到 `/uploads` 并写进正文（就地展开，不再套 iframe 查看器），
+/// 所以这条总量闸门是必需的：一份 8 MiB 的 docx 解出 24 MiB 图片已经很夸张。
+const MAX_IMAGES_TOTAL_BYTES: u64 = 24 * 1024 * 1024;
 /// 纯文本与 HTML 的输出上限。
 const MAX_TEXT_CHARS: usize = 60_000;
 const MAX_HTML_CHARS: usize = 200_000;
@@ -226,9 +232,14 @@ fn collect_images(
     }
 
     let mut out: Vec<PendingImage> = Vec::new();
+    let mut total_bytes: u64 = 0;
     for name in names {
         if out.len() >= MAX_IMAGES {
             notes.push("文档里的图片超过 32 张，多出的没有导入");
+            break;
+        }
+        if total_bytes >= MAX_IMAGES_TOTAL_BYTES {
+            notes.push("文档里的图片合计太大，后面的没有导入");
             break;
         }
         let file_part = name.rsplit('/').next().unwrap_or(&name).to_owned();
@@ -263,6 +274,10 @@ fn collect_images(
                 mime: image_mime(ext),
             },
         });
+        // 累计解压后的字节数：单张限额挡不住"32 张各 8 MiB"这种组合。
+        if let Some(last) = out.last() {
+            total_bytes += last.image.bytes.len() as u64;
+        }
     }
     Ok(out)
 }

@@ -4309,3 +4309,72 @@ v0.1.12 第一次打 tag 时，publish 步骤红了，而 **Actions 的原始日
 | `/downloads/local-build/` | 本机 Windows + zig | zip 3,832,364 / source 632,384 / windows 3,877,300 |
 
 公网重下重算 **8/8 OK**（`MIRROR.txt` 427 B，写着 0.1.12）。
+
+## 45. Word 文档就地展开（替换 iframe 查看器）
+
+### 45.1 问题：iframe 把"文档"变成了"网页里嵌网页"
+
+§41 的做法是：上传 .docx → 解析成 HTML 存进 `media.html` → 正文里只插一个
+`<figure class="doc-embed"><iframe src="/doc/<sha>">`。
+
+技术上没毛病，读起来很糟：
+
+- 那个 iframe 里渲染的是**我们自己的页面**（导航栏、页脚、容器宽度都在），
+  于是正文里出现"一个站内页面套在另一个站内页面里"，宽度只剩一半，还要滚两道；
+- 手机上一屏只能看到一个框顶；
+- 阅读时点了框里的导航，会把读者带离当前文章。
+
+owner 的原话是「你把它变成了内置一个网页看 word，更恶心了，我想要的是把 word
+转成正常的形式展示，能像本地看一样」。这个判断是对的：iframe 解决的是"怎么显示
+那份文件"，而读者要的是"这段内容本身"。
+
+### 45.2 做法：解析结果直接进正文
+
+| 环节 | 改动 |
+| --- | --- |
+| `POST /media/docx` 响应 | 增加 `html` 字段（净化后的正文 HTML），`url` 保留给"原文链接" |
+| `static/editor.js` | `insertDocEmbed()` → `insertDocument()`：把 HTML 节点逐段插进编辑区，末尾补一行 `Word 文档：<a href="/doc/<sha>">标题</a>` |
+| `src/media/service.rs::save_docx` | 解析改用 `ImagePolicy::Collect`；图片逐张落盘 + 登记 `media`（同一事务），把 `{{img:N}}` 换成 `<img src="/uploads/<sha>.<ext>">`；换完**再过一次** `richtext::sanitize` |
+| `src/shared/docx.rs` | 新增 `MAX_IMAGES_TOTAL_BYTES = 24 MiB`：单张 8 MiB 挡不住"32 张各 8 MiB"的乘法 |
+| `templates/shared/editor.html` | 提示语改为"会转换成正文……读起来和本地打开一致" |
+
+三个判断值得记下来：
+
+1. **图片必须一起进来。** 以截图为主的文档，正文里全是「〔图片〕」等于没转换。图片走既有的
+   内容寻址落盘（同一张图十个文档只存一份），URL 用 `/uploads/<sha>.<ext>`，与手动插入的
+   图片同一条链路、同一套缓存策略。
+2. **第二次净化不是多余。** 拼进去的 `<img>` 是我们自己生成的，但"落库的 html 一定过过
+   sanitize"这条不变式比"这次拼得对"更值得守。将来谁在这里多拼一个属性，第二次净化会把它
+   吃掉，而不是让它在正文里活到线上。
+3. **原文链接保留。** 解析器对合并单元格、文本框、SmartArt 有降级（见 §41.3），
+   留一条回到原始 .docx 的路径，比在正文里解释"哪里没还原"有用。
+
+### 45.3 旧内容怎么办
+
+已经发出去的正文里存的是 `<figure class="doc-embed"><iframe>`，它们**原样保留、继续能看**：
+白名单仍然允许受限 iframe（`/doc/<sha>` + `sandbox=""`），`.doc-embed` 样式也留着。
+没有做批量重写——把历史正文改成内联 HTML 需要重新解析原文件，而原文件在 `/uploads`
+里以 sha 命名是齐全的；但那是"内容迁移"，不是修 bug，等有实际需求再做。
+
+### 45.4 验收
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo test` | **294 passed / 0 failed**（lib 194 + 15 个集成目标） |
+| 新增 `tests/docx_flow.rs::an_embedded_picture_is_imported_and_linked_inline` | 响应 `html` 含 `<img src="/uploads/`、无 `{{img:`、`media` 表里该 sha 的 `kind='image'` |
+| `clippy -D warnings` / `fmt --check` | 0 / 0 |
+| 生产二进制 | 7,978,960 B，sha256 `e1e52ea693d1e4f3dc30b4a30562d6f7b9f5103d9c75e85c0e12c243fd89e0b2`，`PT_INTERP=none` |
+| `ops/verify-docx-image.ps1` | **12/12**（新增两条：响应里有 `/uploads/<64hex>.png`、该地址真能取到 200） |
+| `ops/smoke.ps1` | **20/20** |
+
+`ops/verify-docx-image.ps1` 的断言从"有〔图片〕占位"改成了"图片是真地址且 nginx 能取到"——
+这正是这次改动想要的形状：占位符存在本身，就是"图片没导入"的证据。
+
+### 45.5 仍然存在的限制
+
+- **粘贴路径只能人工验**：剪贴板里的 `text/html` 无法在集成测试里伪造出"真实 Word 输出"，
+  前端清洗的正确性靠"后端一定会再净化"兜底。
+- **复杂排版会降级**：横向合并 + 纵向合并交叉的表格会退化成普通单元格；文本框、SmartArt
+  不进正文。不报错，但排版会变——所以正文末尾那条原文链接是必要的。
+- **图片总量上限 24 MiB**：超过就只导入前面的，并在 `notes` 里说明。上限是为了让 1.6 GB 的
+  机器不被一份文档按进 swap；图片现在真的会落盘，所以这个闸门不能只按张数算。

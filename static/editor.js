@@ -192,23 +192,37 @@
       });
     }
 
-    // 插入 Word 文档：服务端把 .docx 解析成 HTML 存进媒体库，这里只放一个受限的 iframe。
-    // 编辑区里存的是 <figure class="doc-embed"><iframe src="/doc/<sha>">…，不是正文的副本——
-    // 文档改了要重新上传，换来的是"编辑器里的 HTML 永远比正文小一个量级"。
-    function insertDocEmbed(url, title) {
-      var figure = make("figure", "doc-embed");
-      var frame = make("iframe");
-      frame.setAttribute("src", url);
-      frame.setAttribute("sandbox", "");
-      frame.setAttribute("loading", "lazy");
-      frame.setAttribute("title", title || "Word 文档");
-      figure.appendChild(frame);
-      if (title) {
-        var caption = make("figcaption");
-        caption.textContent = title;
-        figure.appendChild(caption);
+    // 插入 Word 文档：服务端已经把 .docx 解析成**净化过的正文 HTML**（图片也换成了
+    // `/uploads/<sha>.<ext>` 的真实地址），这里就地插进编辑区。
+    //
+    // 早先的做法是插一个 <iframe src="/doc/<sha>">。那等于把我们的导航栏、页脚
+    // 一起塞进文档里，读者看到的是"一个网页里嵌了另一个网页"，正文宽度只有一半、
+    // 还要滚两道——owner 的原话是"更恶心了"。就地展开之后，段落、标题、表格、图片
+    // 与站内其它内容共用一套排版规则，读起来才像本地打开。
+    function insertDocument(html, url, title) {
+      var holder = make("div");
+      holder.innerHTML = html || "";
+      var nodes = [];
+      while (holder.firstChild) nodes.push(holder.removeChild(holder.firstChild));
+      if (!nodes.length) return;
+      nodes.forEach(function (node) {
+        insertNode(node);
+      });
+      // 来源行：可以点回原文。解析器可能对复杂排版有降级（合并单元格、文本框），
+      // 留一条回到原始文件的路径，比在正文里解释"哪里没还原"有用。
+      var source = make("p");
+      var label = make("em");
+      label.textContent = title ? "Word 文档：" : "Word 文档";
+      source.appendChild(label);
+      if (title && url) {
+        var link = make("a");
+        link.setAttribute("href", url);
+        link.textContent = title;
+        source.appendChild(link);
+      } else if (title) {
+        source.appendChild(document.createTextNode(title));
       }
-      insertNode(figure);
+      insertNode(source);
     }
 
     if (docxInput) {
@@ -238,8 +252,8 @@
             return response.json();
           })
           .then(function (data) {
-            if (!data || !data.url) throw new Error("上传没有返回地址");
-            insertDocEmbed(data.url, data.title);
+            if (!data || !data.html) throw new Error("上传没有返回正文");
+            insertDocument(data.html, data.url, data.title);
           })
           .catch(function (err) {
             window.alert("Word 上传失败：" + describeNetwork(err));

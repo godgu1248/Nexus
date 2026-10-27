@@ -149,6 +149,9 @@ pub async fn upload_docx(
     .await?;
 
     Ok(Json(json!({
+        // `html` 是编辑器真正要用的东西：就地插进正文，读起来像一份文档。
+        // `url` 保留给"在新标签打开原文"的链接（正文末尾的来源行）。
+        "html": stored.html,
         "url": stored.viewer_url,
         "title": stored.title,
         "bytes": stored.bytes,

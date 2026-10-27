@@ -21,7 +21,7 @@
     <span class="editor__sep" aria-hidden="true"></span>
     <button type="button" class="editor__btn" data-cmd="createLink" title="插入链接">链接</button>
     <button type="button" class="editor__btn editor__btn--image" data-upload title="插入图片">图片</button>
-    <button type="button" class="editor__btn editor__btn--docx" data-docx title="上传 Word 文档（.docx）">Word</button>
+    <button type="button" class="editor__btn editor__btn--docx" data-docx title="上传 Word 文档（.docx），转成正文">Word</button>
     <button type="button" class="editor__btn" data-cmd="removeFormat" title="清除格式">清除</button>
     <button type="button" class="editor__btn" data-cmd="undo" title="撤销">↶</button>
     <button type="button" class="editor__btn" data-cmd="redo" title="重做">↷</button>
@@ -31,6 +31,6 @@
   <input type="hidden" name="{{ html_name }}" data-html value="">
   <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file hidden>
   <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" data-docx-file hidden>
-  <p class="editor__hint">支持图片（PNG / JPEG / WebP / GIF，单张 ≤ 4 MB）。也可以直接把截图或 Word 里的内容粘贴进来；上传 .docx（≤ 8 MB）会内嵌成可翻页的文档。</p>
+  <p class="editor__hint">支持图片（PNG / JPEG / WebP / GIF，单张 ≤ 4 MB）。也可以直接把截图或 Word 里的内容粘贴进来；上传 .docx（≤ 8 MB）会转换成正文：段落、标题、列表、表格与图片都留下来，读起来和本地打开一致。</p>
 </div>
 {% endmacro %}
