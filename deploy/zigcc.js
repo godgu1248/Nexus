@@ -66,7 +66,11 @@ if (length > MAX_ARGV_CHARS) {
   const rsp = path.join(os.tmpdir(), `zigcc-${process.pid}-${Date.now()}.rsp`);
   fs.writeFileSync(rsp, tail.map(quote).join('\n'), 'utf8');
   argv = ['cc', '@' + rsp];
-  console.error(`zig wrapper: argv ${length} chars, using response file ${rsp}`);
+  // 只在显式要求时说一句。这不是错误，但 cargo 会把链接器的 stderr 当成
+  // "warning: <crate> generated 1 warning"，于是每次构建都像是带着问题。
+  if (process.env.ZIGCC_VERBOSE) {
+    console.error(`zig wrapper: argv ${length} chars, using response file ${rsp}`);
+  }
 }
 
 const res = spawnSync(ZIG, argv, { stdio: 'inherit' });

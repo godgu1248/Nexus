@@ -4532,3 +4532,70 @@ error: UnableToSpawnSelf
 
 教训写在这里，因为下次还会遇到：**"下载卡住"与"下载失败"是两种故障，症状一样但处置相反**——
 前者要超时+续传，后者要换通道。这次两者都发生了，所以超时、续传、换通道三件一起上。
+
+## 47. 第六轮审查：Word 图片的「解压炸弹」与自学头解析
+
+### 47.1 发现
+
+Word 里内嵌的图片要经过 `src/shared/imageopt.rs::optimize_docx_image` 压缩。原实现在判断「这张图值不值得压」时调用
+`image::load_from_memory`——它会**把整张图解成 RGBA 位图**，而在这之前唯一的门槛是
+`MAX_IMAGES_TOTAL_BYTES = 24 MiB`，那是**压缩后**的字节数。
+
+一份 24 MiB 的 docx 里可以塞 32 张各几百 KB 的 PNG，每张声明 20000×20000（400 MB）：
+文件很小，解码后是几 GB。`max_decode_bytes` 不是在解码前生效的——它是在**分配之后**才被用来判断要不要回退，
+真正挡住它的是（`[features] parallel = ...`）`image` 的默认内存上限，而那取决于 CPU 核数，不是我们能承诺的数字。
+生产机 `MemoryMax=700M`、物理内存 1.6 GB，一次上传就能把进程按死。
+
+顺带一个问题：`is_effectively_opaque` 的实现先把整张图复制成 RGBA 再采样，
+**在缩放之前**做这件事等于白算一遍 2× 的内存；顺序应当是「先缩到 1600px 内，再判断透明度」。
+
+### 47.2 修复
+
+| 改动 | 目的 |
+| --- | --- |
+| `MAX_PIXELS = 24_000_000` | 1600×1600 的图远小于此；声明面积超过就直接放弃优化，原图照存 |
+| `MAX_DECODE_BYTES = 256 MiB` | 与 24 MP 一起构成解码前的硬上限（24 MP × 4 字节 = 96 MB，留足余量） |
+| `declared_dimensions(&[u8])` | **自己读文件头**拿宽高：PNG 的 `IHDR`、JPEG 的 `SOFn`、GIF 的逻辑屏、WebP 的 `VP8X`/`VP8`/`VP8L` |
+| `decode_within_limits` | `ImageReader::with_guessed_format()` + `Limits{max_image_width/height, max_alloc}`，让 `image` 在解码阶段就拒绝 |
+| 透明度判断移到 `thumbnail()` 之后 | 少一遍全尺寸 RGBA 复制 |
+| 失败一律回退原图 | 压缩是优化，不该因为一张怪图让整份文档上传失败 |
+
+判定顺序是**先读头、再解码**：头里声明的面积超限，连 `Limits` 都不必试。
+
+### 47.3 为什么不用 `into_dimensions()`
+
+`image::ImageReader::into_dimensions()` 看起来正好是「只读头不解码」，但它对**只有头的文件**返回
+`Decoding(Error { message: "unexpected end of file" })`——它仍要求文件能完整解出一个可用的解码器。
+攻击者恰好可以把文件做得很小（只有头），于是这条路既拿不到尺寸、也挡不住炸弹。
+（这是我先用一次性 `examples/dimcheck.rs` 实测出来的：真实图片能拿到尺寸，合成头返回 EOF。）
+
+自学头解析只有几十行，且不依赖任何"解码器是否愿意开工"的假设。
+
+### 47.4 顺手修掉一个「假 warning」
+
+每次 musl 构建都显示 `warning: nexus (bin "nexus") generated 1 warning`，实际内容是链接器包装器
+`deploy/zigcc.js` 打印的 `argv 31939 chars, using response file …`——它是提示，但走的是 stderr，
+cargo 记在 crate 头上。改为只在 `ZIGCC_VERBOSE=1` 时输出，构建日志恢复干净（实测 relink 后 0 warning）。
+
+### 47.5 验收
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo test --lib imageopt` | **13 passed**（新增 JPEG `SOFn`、WebP `VP8X` 尺寸解析；炸弹「原样返回不外传」） |
+| 反向对照 | 真实 2400×1600 图片**仍然**被压（`large_photo_like_images_are_scaled_and_converted_to_jpeg`），证明拦的是炸弹不是正常图 |
+| `cargo test` 全量 | **307 passed / 0 failed**（lib 207 + 14 个集成目标） |
+| `clippy --all-targets -D warnings` / `fmt --check` | 0 / 0 |
+| musl 构建 | 8,873,848 B，sha256 `94709f9bf0456ff83c79b9e2674ad589ef544597994d47087b9ee6c4a365cf65`，`PT_INTERP=none`，0 warning，两次构建字节一致 |
+| 线上 | `deploy-ui.ps1` 三份静态哈希一致、`restart: active`、`healthz 200`；`smoke.ps1` **20/20**；`verify-docx-inline.ps1` **15/15** |
+
+### 47.6 记录但没改
+
+- docx 解析的峰值内存仍是「8 MiB 输入 + 32 MiB `document.xml` + ≤24 MiB 图片」≈ 64 MB 上限，可接受；要再降只能改成流式从 zip 读 XML。
+- 用户直接上传的**图片**（非 docx 内嵌）不压缩：那条路径上的图是用户主动选的，压了会改变他以为上传的东西；docx 内嵌图不同，它是"文档的一部分"，读者关心的是看得清而不是原始字节。
+- 图片宽高仍只做 1..=2400 的整数校验（`richtext`），不做等比缩放。
+
+### 47.7 这一轮的坑
+
+- `deploy/build-musl.ps1` 会把仓库里的 `deploy/zigcc.js` 复制到临时目录用，所以 `C:\zig\zigcc.js` 那份是旧的、**不用改**（两份哈希不同是预期的）。
+- 直接 `cargo build --target x86_64-unknown-linux-musl` 会失败（`failed to find tool "x86_64-linux-musl-gcc"`）：zig 的 `CC`/`AR`/`LINKER` 环境变量只由 `deploy/build-musl.ps1` 注入，绕开脚本没有替代品。
+- `write` 工具对「刚被删除的同名文件」会报 `file no longer exists`，换个文件名即可（`bump.js` → `bumpver.js`）。
