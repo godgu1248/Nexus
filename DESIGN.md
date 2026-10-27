@@ -4803,3 +4803,26 @@ body.theme-ocean  { --accent: #38bdf8; --accent-2: #22d3ee; }
 顺带修了验证脚本自己：`$home` 是 PowerShell 的只读自动变量，赋值抛
 `Cannot overwrite variable HOME` 且**不中断脚本**，于是第一次跑出 `body=[]` 的假失败。
 这类"变量名撞了内置变量"的坑在本项目已经出现四次（`$home` 两次、`$args` 一次、`$i:` 一次）。
+
+### 49.9 镜像终于补齐到 0.1.18（含一次字符集事故）
+
+从 0.1.15 起镜像一直停在 0.1.14：本机到 GitHub 的连接时通时断（`curl` 返回 `000`），
+服务器侧拉取也只有 23 KB/s。owner 打开加速通道后的实际流程：
+
+1. `GET /repos/godgu1248/Nexus/releases/tags/v0.1.18` 确认五个附件 `uploaded`；
+2. 下载四个包 + `SHA256SUMS.txt`，**逐条与发布页的哈希比对**（`bad=0`）；
+3. 本机另跑 `package.ps1` 出 `dist/`（Windows 二进制用 `cargo build --release` 新编，1 分 30 秒）；
+4. 两套产物打成 22 MB 的 stage 包上传，服务器上装到 `/opt/nexus/downloads/`
+   （顶层 = CI 产物、`local-build/` = 本机 zig 产物），各自 `sha256sum -c` 全 `OK`；
+5. 公网重新下载**七个文件**并重算哈希：`RESULT top=4 local=3 mirror=True failures=0`。
+
+`MIRROR.txt` 这次写清了为什么有两套字节（链接器不同），以及"要对着 Release 页校验就用顶层"。
+
+**事故**：改 `README.md` 第 71 行时我用 PowerShell 的 `-replace` 配 `'\u5f53\u524d…'`，
+以为它会转义——PowerShell **不认识 `\uXXXX`**（它用 `` `u{5F53} ``），于是把转义序列本身写进了文件，
+那一行变成 `\u5f53\u524d\u955c\u50cf…`。发现方式是改完立刻 `node` 打印那一行（而不是只看有没有报错）。
+修法：写一个 `.js` 文件做替换（`write` 工具写出的文件是 UTF-8），顺手全仓扫了一遍 `\u[0-9a-f]{4}`，确认没有第二处。
+
+教训：**任何含非 ASCII 的改写都不要走 PowerShell 内联字符串**——要么 `.js` 文件，要么
+`[System.IO.File]::WriteAllText` 配 `write` 工具产出的 UTF-8 源。改完必须回读一次做 `JSON.stringify`
+对照，不能只信"命令没报错"。
