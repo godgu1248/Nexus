@@ -4759,3 +4759,47 @@ body.theme-ocean  { --accent: #38bdf8; --accent-2: #22d3ee; }
   以及 `.swatch--*` 三处——**三处必须一致**，否则设置页的预览会与真实效果不符。
 - 浅色主题下 `.editor__surface` 等富文本区域的对比度是按 `--surface` 算的，没有单独再调一档。
 - 没有做"跟随系统深浅色"：那需要 `prefers-color-scheme` 与用户显式选择合并，属于额外一层状态。
+
+### 49.8 自查这一轮又抓到四件事
+
+**一、`?v=` 藏在二进制里，改 CSS 等于要重编**
+
+改完 CSS 只推静态文件，页面上的 `cache key` 还是 `app.css?v=20261101`——因为版本号写在
+`templates/layout.html`，而模板是 Askama **编译期**嵌进二进制的。nginx 对 `/static/*` 发
+`immutable`，URL 不变就等于老访客永远拿旧样式。所以「改 CSS」的真实成本是**一次 release 构建**
+（本机约 2 分钟），必须写成流程：改样式 → 改 `?v=` → 重编 → 部署 → 核对线上 `cache key`。
+
+要彻底解耦，得把版本号变成运行时配置（`STATIC_VERSION` 环境变量）塞进模板上下文——但那要给
+30 多个页面结构体再加一个字段，收益不抵这一轮的改动量，先记成债务。
+
+**二、两处 `var(--muted)` 引用了一个从来不存在 token**
+
+`.richtext` 与查看器的次要文字用了 `color: var(--muted, var(--text-dim))`。兜底让颜色"看起来没问题"，
+所以谁都没发现这个 token 从来没定义过。用静态审计脚本扫"引用了但没定义"的 token 才暴露出来，
+已统一改成 `var(--text-dim)`。
+
+**三、`:root` 没有 `color-scheme`，首屏会闪一下浅色**
+
+`color-scheme` 只在 `body.theme-*` 上声明，而主题 class 要等 `<body>` 解析到才生效。
+在 `<head>` 到 `<body>` 之间，表单控件与滚动条按浏览器默认（浅色）绘制，深色主题下会闪一下。
+`:root` 补 `color-scheme: dark`（与默认主题一致），浅色主题再由 `body.theme-paper/sand` 覆盖。
+
+**四、静态审计脚本（`audit-css.js` 的思路）**
+
+只读脚本做四件事：列出「定义了却没被 `var()` 引用」的 token、「被引用却没定义」的 token、
+每条 `color-mix` 前面是否缺少普通颜色兜底、以及 `:root` 之外还剩多少硬编码十六进制色。
+这一轮的结果：悬空引用 1（就是上面那条）、硬编码色 0、`color-mix` 无兜底 30 处
+（都是背景与徽章——老浏览器会整条丢弃，徽章退化成 `.badge` 基类的次级文字色，可读但不上色；
+现代浏览器不受影响，记为兼容性债务而不是 bug）。
+
+**五、端到端验收：浅色主题真的落到了 `<body>`**
+
+`ops/verify-theme-switch.ps1` 用真实账号走一遍：登录 → 打开 `/settings` 数出 **10 张色卡** →
+提交 `theme=paper` → 首页 `<body class="theme-paper bg-plain font-sans">` → 再切回 `ink` →
+`<body class="theme-ink bg-plain font-sans">`，`RESULT ok=2 fail=0`。
+配合 `contrast.js`（10 套 × 7 组配对全部达标），这是没有浏览器的情况下能给出的最强证据：
+**浅色主题确实生效，且字看得清。**
+
+顺带修了验证脚本自己：`$home` 是 PowerShell 的只读自动变量，赋值抛
+`Cannot overwrite variable HOME` 且**不中断脚本**，于是第一次跑出 `body=[]` 的假失败。
+这类"变量名撞了内置变量"的坑在本项目已经出现四次（`$home` 两次、`$args` 一次、`$i:` 一次）。

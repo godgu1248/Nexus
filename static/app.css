@@ -9,6 +9,9 @@
 
 /* ---------- tokens ---------- */
 :root {
+  /* 先按深色声明一次：主题 class 要到 <body> 才生效，
+     这之间的表单控件与滚动条不该先闪一下浅色。 */
+  color-scheme: dark;
   --bg: #0b0d12;
   --bg-elev: #10131a;
   --surface: #141821;
@@ -1501,7 +1504,7 @@ body.font-mono .card p { max-width: 68ch; }
 }
 .editor__surface:empty::before {
   content: "在这里写正文……";
-  color: var(--muted, var(--text-dim));
+  color: var(--text-dim);
 }
 .editor__fallback {
   display: block;
@@ -1519,7 +1522,7 @@ body.font-mono .card p { max-width: 68ch; }
 .editor__hint {
   margin: 0;
   padding: 0 var(--space-3) var(--space-2);
-  color: var(--muted, var(--text-dim));
+  color: var(--text-dim);
   font-size: 0.8rem;
 }
 /* 没有 JS 时不显示工具栏与占位层，用户看到的就是那个 textarea。 */
