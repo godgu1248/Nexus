@@ -68,17 +68,18 @@ https://flowrun.cloud/downloads/MIRROR.txt
 ```
 
 镜像里的字节与 Release 资产完全一致（`sha256sum -c` 能过），目录说明见 `MIRROR.txt`。
-当前镜像放的是 **v0.1.11**（同一目录只留最新一版，历史版本请到 Release 页取）。
+当前镜像放的是 **v0.1.12**（同一目录只留最新一版，历史版本请到 Release 页取）。
 另外 `https://flowrun.cloud/downloads/local-build/` 还放了维护者本机用 `package.ps1` 打的那一套：
 源码相同、链接器不同，所以 Linux 二进制字节不一样，带自己的 `SHA256SUMS.txt` 与 `NOTE.txt`。
 要「与 Release 逐字节一致」用上面那组，要「维护者本机验证过的那份」用子目录。
 
 两个二进制包都不含 `.env`：配置项见 `.env.example`，`DATABASE_URL` 是唯一必填项。包内 `deploy/` 放着 systemd unit、nginx 配置与上传目录脚本，与线上跑的是同一份。
 
-解压后三行就能跑起来（Windows 把 `./nexus` 换成 `.\nexus.exe`）：
+解压后三行就能跑起来（Windows 把 `./nexus` 换成 `.\nexus.exe`）。
+`<VERSION>` 换成你下载到的那一版——这里刻意不写死版本号，免得下次发版又忘了改：
 
 ```bash
-unzip nexus-0.1.8-linux-x86_64.zip && cd nexus-0.1.8-linux-x86_64
+unzip nexus-<VERSION>-linux-x86_64.zip && cd nexus-<VERSION>-linux-x86_64
 chmod +x nexus                       # zip 从 Windows 打包时不带可执行位
 cp .env.example .env && $EDITOR .env      # 至少填 DATABASE_URL
 ./nexus                              # 默认监听 127.0.0.1:8080

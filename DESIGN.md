@@ -4283,3 +4283,29 @@ iframe 也禁止——浏览器在那个框里显示「flowrun.cloud 拒绝连�
   （注释里点名对方的常量），要么在验收里打一条「大于业务上限、小于网关上限」的请求。
 - **排查顺序**：先看日志能定位到"哪一个请求、哪一层拒绝的"，再看代码。这次两分钟就在
   `error.log` 里找到了 `client intended to send too large body`——比读一小时 JS 有用。
+
+### 44.7 发布流水线的一次真实失败与它的诊断改造
+
+v0.1.12 第一次打 tag 时，publish 步骤红了，而 **Actions 的原始日志需要 token 才能读**——
+我只能看到"发布"变红，看不到 `gh` 说了什么。当时的处置顺序是：
+
+1. 先用公开 API 确认事实：`GET /releases/tags/v0.1.12` 返回 `Not Found`——
+   说明 `gh release create` **在创建之前就失败了**，不是"上传了一半"；
+2. 把 publish 步骤改造成自带诊断：`tee` 全量日志，失败时用 `trap ERR` 把最后 60 行写进
+   `$GITHUB_STEP_SUMMARY`（**summary 是匿名可读的**，日志不是）；
+3. 把 tag 移到含该改动的 commit 上重新触发（`git tag -d` + `push :refs/tags/…` + 重新打）。
+
+重跑一次就绿了，五个资产齐、`SHA256SUMS.txt` 逐条对上——说明那次失败是瞬时的
+（GitHub 侧的 5xx/网络），而不是配置错。教训不是"要重试"，而是**失败时要留下可读的证据**：
+在看不到日志的仓库上，把错误写进 summary 比在本地猜十轮都值。
+
+镜像这一步也换了做法：本机到 github.com 的连接反复被重置（下载 4 个包要十几分钟），
+而**服务器直连 1.5 秒**就拿到同一个资产。于是 `ops/install-0112.sh` 改成在服务器侧下载 CI 资产、
+本地只上传 zig 打的那三个包（`/tmp/local012`），两套各自 `sha256sum -c` 通过后再落盘。
+
+| 位置 | 来源 | 字节 |
+| --- | --- | --- |
+| `/downloads/` 顶层 | GitHub Actions（ubuntu） | tar.gz 3,905,011 / zip 3,922,542 / source 632,384 / windows 3,884,031 |
+| `/downloads/local-build/` | 本机 Windows + zig | zip 3,832,364 / source 632,384 / windows 3,877,300 |
+
+公网重下重算 **8/8 OK**（`MIRROR.txt` 427 B，写着 0.1.12）。
