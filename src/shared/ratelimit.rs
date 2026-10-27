@@ -93,6 +93,44 @@ impl Rules {
     }
 }
 
+/// 把客户端 IP 收敛成"用于限额的地址"。
+///
+/// IPv6 必须按 /64 归并：一个普通的 VPS 或家宽就自带一整个 /64（2^64 个地址），
+/// 按完整地址计数等于没限速——攻击者每打一次换个后缀，我们的桶就多一个，
+/// 顺带把别人的桶挤出 `MAX_KEYS`。按 /64 归并后，同一段地址共用一个额度，
+/// 这才是"同一个人"的粒度。
+///
+/// IPv4 原样保留（一个地址就是一个出口）；IPv4-mapped 的 v6 地址还原成 v4，
+/// 否则 `::ffff:1.2.3.4` 会被归到 `::/64` 那一桶里去。
+///
+/// 解析不了的字符串原样返回：上游（`auth::middleware::client_ip`）已经过滤过一遍，
+/// 这里再拒绝一次只会把"记不上账"变成"报错"。
+pub fn address_key(ip: &str) -> String {
+    use std::net::IpAddr;
+
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => v4.to_string(),
+        Ok(IpAddr::V6(v6)) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.to_string();
+            }
+            let segments = v6.segments();
+            let masked = std::net::Ipv6Addr::new(
+                segments[0],
+                segments[1],
+                segments[2],
+                segments[3],
+                0,
+                0,
+                0,
+                0,
+            );
+            format!("{masked}/64")
+        }
+        Err(_) => ip.to_owned(),
+    }
+}
+
 struct Bucket {
     count: u32,
     reset_at: Instant,
@@ -303,5 +341,45 @@ mod tests {
             len > MAX_KEYS / 2,
             "淘汰应只清掉最早的一批，不能整体清空，实际剩下 {len}"
         );
+    }
+
+    #[test]
+    fn ipv6_addresses_are_grouped_by_slash_64() {
+        // 同一个 /64 里的两个地址必须落进同一个桶：普通 VPS 自带一整个 /64，
+        // 逐地址计数等于给对方无限额度。
+        assert_eq!(
+            address_key("2001:db8:abcd:1234:1:2:3:4"),
+            address_key("2001:db8:abcd:1234:ffff:eeee:dddd:cccc")
+        );
+        assert_eq!(address_key("2001:db8::1"), "2001:db8::/64");
+    }
+
+    #[test]
+    fn a_different_slash_64_gets_its_own_quota() {
+        let limiter = Limiter::new(Rules::uniform(1));
+        let first = address_key("2001:db8:aaaa::1");
+        let second = address_key("2001:db8:bbbb::1");
+        assert_ne!(first, second);
+
+        assert!(limiter.hit(Kind::Register, &first).is_ok());
+        assert!(limiter.hit(Kind::Register, &first).is_err());
+        assert!(
+            limiter.hit(Kind::Register, &second).is_ok(),
+            "另一个 /64 不应受牵连"
+        );
+    }
+
+    #[test]
+    fn ipv4_and_mapped_addresses_keep_the_plain_form() {
+        assert_eq!(address_key("203.0.113.7"), "203.0.113.7");
+        // ::ffff:203.0.113.7 是"v4 装在 v6 壳里"，归到 ::/64 会把所有 v4 混成一个桶。
+        assert_eq!(address_key("::ffff:203.0.113.7"), "203.0.113.7");
+    }
+
+    #[test]
+    fn unparsable_keys_pass_through_untouched() {
+        // 上游已过滤过一遍；这里再拒绝只会把"记不上账"变成"报错"。
+        assert_eq!(address_key("-"), "-");
+        assert_eq!(address_key("not-an-ip"), "not-an-ip");
     }
 }

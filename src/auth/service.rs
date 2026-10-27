@@ -132,15 +132,18 @@ pub async fn hash_password(password: &str) -> Result<String, AppError> {
 }
 
 fn attempt_key(ip: Option<&str>, username: &str) -> String {
+    // 地址先按 /64 归并（`address_key` 的理由见 shared::ratelimit）：
+    // 否则 IPv6 上逐地址计数，换个后缀就是一个新额度。
+    let address = ip.map(crate::shared::ratelimit::address_key);
     format!(
         "{}|{}",
-        ip.unwrap_or("-"),
+        address.as_deref().unwrap_or("-"),
         username.trim().to_ascii_lowercase()
     )
 }
 
 fn ip_key(ip: &str) -> String {
-    format!("ip|{ip}")
+    format!("ip|{}", crate::shared::ratelimit::address_key(ip))
 }
 
 fn attempts() -> MutexGuard<'static, HashMap<String, Attempt>> {
@@ -546,6 +549,16 @@ mod tests {
             "203.0.113.7|alice"
         );
         assert_eq!(attempt_key(None, "Bob"), "-|bob");
+    }
+
+    #[test]
+    fn attempt_key_groups_ipv6_by_slash_64() {
+        // 否则 IPv6 上换个后缀就是一个新额度，撞库的 5 次上限等于不存在。
+        assert_eq!(
+            attempt_key(Some("2001:db8:1:2:aaaa::1"), "Alice"),
+            attempt_key(Some("2001:db8:1:2:bbbb::9"), "alice"),
+            "同一个 /64 + 同一个用户名必须落到同一个键"
+        );
     }
 
     #[test]

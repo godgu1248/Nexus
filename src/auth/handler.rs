@@ -289,11 +289,15 @@ pub async fn register_submit(
 
     // 注册要限速：每次注册是一次 argon2（19 MiB 内存 + 两次迭代），
     // 不限速的话它就是一个不用登录就能触发的 CPU 消耗点。
-    // 键用出口 IP——注册时还没有身份可用。
-    state.rate.guard(
-        crate::shared::ratelimit::Kind::Register,
-        ip.as_deref().unwrap_or("-"),
-    )?;
+    // 键用出口 IP——注册时还没有身份可用；地址先按 /64 归并，
+    // 否则 IPv6 上换个后缀就是一个新额度（见 `ratelimit::address_key`）。
+    let rate_key = ip
+        .as_deref()
+        .map(crate::shared::ratelimit::address_key)
+        .unwrap_or_else(|| "-".to_owned());
+    state
+        .rate
+        .guard(crate::shared::ratelimit::Kind::Register, &rate_key)?;
 
     let input = RegisterInput {
         username: form.username.trim(),
