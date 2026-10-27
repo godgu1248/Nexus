@@ -33,7 +33,9 @@
   --radius-lg: 18px;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
   --shadow-2: 0 8px 24px -12px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.35);
-  --shadow-glow: 0 0 0 1px rgb(110 168 254 / 0.25), 0 10px 40px -18px rgb(110 168 254 / 0.55);
+  /* 光晕跟着强调色走：早先写死了蓝色 RGB，主题换成暖色之后光晕还是蓝的。 */
+  --shadow-glow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 10px 40px -18px color-mix(in srgb, var(--accent) 55%, transparent);
 
   --space-1: 4px;
   --space-2: 8px;
@@ -94,7 +96,7 @@ body {
 
 img, svg { max-width: 100%; display: block; }
 a { color: var(--accent); text-decoration: none; }
-a:hover { color: #a9c8ff; text-decoration: underline; text-underline-offset: 3px; }
+a:hover { color: color-mix(in srgb, var(--accent) 62%, var(--text)); text-decoration: underline; text-underline-offset: 3px; }
 code, kbd, samp { font-family: var(--font-mono); font-size: 0.92em; }
 code {
   padding: 1px 6px;
@@ -309,7 +311,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: var(--space-5) 0; }
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-dim);
-  background: rgb(255 255 255 / 0.03);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 .hero__actions { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-5); }
@@ -433,23 +435,34 @@ hr { border: 0; border-top: 1px solid var(--line); margin: var(--space-5) 0; }
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text-dim);
-  background: rgb(255 255 255 / 0.03);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   white-space: nowrap;
 }
+/* 徽章一律由状态色与 --text 混出来：写死浅色文字在浅色主题上会看不见。 */
 .badge--public, .badge--ok, .badge--done {
-  color: #9ce8b8; border-color: rgb(74 222 128 / 0.35); background: rgb(74 222 128 / 0.10);
+  color: color-mix(in srgb, var(--ok) 55%, var(--text));
+  border-color: color-mix(in srgb, var(--ok) 38%, transparent);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
 }
 .badge--internal {
-  color: #b9cdff; border-color: rgb(110 168 254 / 0.35); background: rgb(110 168 254 / 0.10);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .badge--group {
-  color: #d6c6ff; border-color: rgb(139 124 246 / 0.38); background: rgb(139 124 246 / 0.12);
+  color: color-mix(in srgb, var(--accent-2) 55%, var(--text));
+  border-color: color-mix(in srgb, var(--accent-2) 40%, transparent);
+  background: color-mix(in srgb, var(--accent-2) 13%, transparent);
 }
 .badge--pending, .badge--todo {
-  color: #fcd9a0; border-color: rgb(251 191 36 / 0.35); background: rgb(251 191 36 / 0.10);
+  color: color-mix(in srgb, var(--warn) 55%, var(--text));
+  border-color: color-mix(in srgb, var(--warn) 38%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 .badge--doing {
-  color: #b9cdff; border-color: rgb(110 168 254 / 0.35); background: rgb(110 168 254 / 0.12);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .badge--draft {
   color: var(--text-mute); border-color: var(--line-strong); background: var(--surface-2);
@@ -475,7 +488,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: var(--space-5) 0; }
   white-space: nowrap;
   transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
-.btn:hover { text-decoration: none; background: var(--surface-3, #232a38); border-color: #3a4459; }
+.btn:hover { text-decoration: none; background: var(--surface-3); border-color: var(--line-strong); }
 .btn:active { transform: translateY(1px); }
 
 .btn--primary {
@@ -488,8 +501,12 @@ hr { border: 0; border-top: 1px solid var(--line); margin: var(--space-5) 0; }
 .btn--ghost { background: transparent; border-color: var(--line-strong); color: var(--text-dim); }
 .btn--ghost:hover { background: var(--surface-2); color: var(--text); }
 
-.btn--danger { border-color: rgb(248 113 113 / 0.45); color: #ffb3b3; background: rgb(248 113 113 / 0.08); }
-.btn--danger:hover { background: rgb(248 113 113 / 0.16); color: #ffd0d0; }
+.btn--danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: color-mix(in srgb, var(--danger) 62%, var(--text));
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+.btn--danger:hover { background: color-mix(in srgb, var(--danger) 17%, transparent); color: color-mix(in srgb, var(--danger) 45%, var(--text)); }
 
 .btn--small { height: 28px; padding: 0 10px; font-size: 12.5px; border-radius: 8px; }
 .btn--block { width: 100%; }
@@ -511,7 +528,7 @@ input[type="date"], input[type="search"], select, textarea {
   padding: 9px 11px;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
-  background: #0d1017;
+  background: var(--bg-elev);
   color: var(--text);
   font-family: inherit;
   font-size: 14px;
@@ -561,9 +578,9 @@ textarea { min-height: 140px; resize: vertical; }
   font-size: 13.5px;
   color: var(--text-dim);
 }
-.flash--success { border-left-color: var(--ok); color: #bdf3cf; }
-.flash--error, .alert--error { border-left-color: var(--danger); color: #ffc2c2; }
-.flash--info { border-left-color: var(--accent); color: #c8dbff; }
+.flash--success { border-left-color: var(--ok); color: color-mix(in srgb, var(--ok) 50%, var(--text)); }
+.flash--error, .alert--error { border-left-color: var(--danger); color: color-mix(in srgb, var(--danger) 55%, var(--text)); }
+.flash--info { border-left-color: var(--accent); color: color-mix(in srgb, var(--accent) 50%, var(--text)); }
 
 /* ---------- tables ---------- */
 .table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
@@ -577,7 +594,7 @@ textarea { min-height: 140px; resize: vertical; }
   background: var(--bg-elev);
   border-bottom-color: var(--line-strong);
 }
-.table tbody tr:hover { background: rgb(255 255 255 / 0.02); }
+.table tbody tr:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
 .table code { font-size: 12px; }
 
 /* ---------- docs / threads / posts ---------- */
@@ -630,7 +647,7 @@ textarea { min-height: 140px; resize: vertical; }
   color: var(--text-dim);
   background: var(--surface-2);
 }
-.pager__btn:hover { text-decoration: none; color: var(--text); border-color: #3a4459; }
+.pager__btn:hover { text-decoration: none; color: var(--text); border-color: var(--line-strong); }
 .pager__btn.is-disabled { opacity: 0.4; pointer-events: none; }
 .pager__status { font-size: 12.5px; color: var(--text-mute); }
 
@@ -694,9 +711,9 @@ textarea { min-height: 140px; resize: vertical; }
 
 /* ---------- 来宾（Guest）标签与提示条 ---------- */
 .badge--guest {
-  background: rgb(139 124 246 / 0.16);
-  border: 1px solid rgb(139 124 246 / 0.38);
-  color: #c3b8ff;
+  background: color-mix(in srgb, var(--accent-2) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 40%, transparent);
+  color: color-mix(in srgb, var(--accent-2) 55%, var(--text));
   margin-left: var(--space-2);
 }
 
@@ -717,12 +734,12 @@ textarea { min-height: 140px; resize: vertical; }
   margin: var(--space-4) auto 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius);
-  background: rgb(139 124 246 / 0.10);
-  border: 1px solid rgb(139 124 246 / 0.28);
+  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 30%, transparent);
 }
 
 .notice__icon {
-  color: #c3b8ff;
+  color: color-mix(in srgb, var(--accent-2) 55%, var(--text));
   font-size: 1.1rem;
   line-height: 1;
 }
@@ -742,13 +759,13 @@ textarea { min-height: 140px; resize: vertical; }
   white-space: nowrap;
   color: var(--accent);
   text-decoration: none;
-  border-bottom: 1px solid rgb(110 168 254 / 0.4);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .notice__link:hover,
 .notice__link:focus-visible {
-  color: #a8c7ff;
-  border-bottom-color: #a8c7ff;
+  color: color-mix(in srgb, var(--accent) 62%, var(--text));
+  border-bottom-color: color-mix(in srgb, var(--accent) 62%, var(--text));
 }
 
 @media (max-width: 640px) {
@@ -762,16 +779,191 @@ textarea { min-height: 140px; resize: vertical; }
 }
 /* ===== themes & settings ===== */
 
-/* 主题：只覆盖强调色，底色保持统一的深色，避免每套主题都要重新校一遍对比度。
-   --accent-ink 是「贴在强调色上的文字」颜色，全都取深色，因为 8 套强调色都是亮色。 */
-body.theme-ink    { --accent: #6ea8fe; --accent-2: #8b7cf6; }
-body.theme-ocean  { --accent: #38bdf8; --accent-2: #22d3ee; }
-body.theme-forest { --accent: #4ade80; --accent-2: #34d399; }
-body.theme-sunset { --accent: #fb923c; --accent-2: #f472b6; }
-body.theme-violet { --accent: #a78bfa; --accent-2: #c084fc; }
-body.theme-rose   { --accent: #f472b6; --accent-2: #fb7185; }
-body.theme-amber  { --accent: #fbbf24; --accent-2: #f59e0b; }
-body.theme-slate  { --accent: #94a3b8; --accent-2: #cbd5e1; }
+/* 主题 = 一整套调色板，不是只换强调色。
+   早先 8 套主题共用一个深蓝底（#0b0d12 / #141821 那一族），换来换去只有高亮在变，
+   看上去像同一个配色改了个高亮——"网上全是这种配色"的观感就是这么来的。
+   现在每套主题自带底色、卡面、分隔线、文字三级与强调色，其中 paper / sand 是浅色底，
+   ocean / forest / sunset / rose 各有自己的色相，不再共用一块深蓝。
+
+   --accent-ink 是「贴在强调色上的文字」颜色：深色主题取深色，浅色主题取浅色。
+   color-scheme 一起切换，表单控件与滚动条才不会在浅色底上还是黑的。 */
+
+body.theme-ink {
+  color-scheme: dark;
+  --bg: #121110;
+  --bg-elev: #171513;
+  --surface: #1b1917;
+  --surface-2: #23201d;
+  --surface-3: #2c2824;
+  --line: #2c2824;
+  --line-strong: #3a352f;
+  --text: #ece7e1;
+  --text-dim: #b3a99e;
+  --text-mute: #8a8074;
+  --accent: #e8b15c;
+  --accent-2: #d08a4a;
+  --accent-ink: #1a1206;
+}
+
+/* 浅色：暖纸底 + 赭红。白天、投屏、打印都最清楚。 */
+body.theme-paper {
+  color-scheme: light;
+  --bg: #f6f2ea;
+  --bg-elev: #f1ece2;
+  --surface: #fffdf8;
+  --surface-2: #efe9dd;
+  --surface-3: #e6dfd0;
+  --line: #e2dacb;
+  --line-strong: #cfc4b0;
+  --text: #23201b;
+  --text-dim: #4f483f;
+  --text-mute: #6b6355;
+  --accent: #a8452a;
+  --accent-2: #8a5a2b;
+  --accent-ink: #fffaf3;
+  --shadow-1: 0 1px 2px rgb(60 48 30 / 0.1);
+  --shadow-2: 0 10px 30px -18px rgb(60 48 30 / 0.35), 0 2px 6px rgb(60 48 30 / 0.1);
+}
+
+/* 浅色：米灰底 + 橄榄。比 paper 冷一点，长时间读文档眼睛不累。 */
+body.theme-sand {
+  color-scheme: light;
+  --bg: #ece7dc;
+  --bg-elev: #e9e3d6;
+  --surface: #faf7f0;
+  --surface-2: #e4ddce;
+  --surface-3: #dad2c0;
+  --line: #d8cfbd;
+  --line-strong: #c4b9a2;
+  --text: #24211b;
+  --text-dim: #514a3e;
+  --text-mute: #6e675a;
+  --accent: #5f7a3a;
+  --accent-2: #8a7a2e;
+  --accent-ink: #fbfdf5;
+  --shadow-1: 0 1px 2px rgb(70 60 40 / 0.12);
+  --shadow-2: 0 10px 30px -18px rgb(70 60 40 / 0.38), 0 2px 6px rgb(70 60 40 / 0.12);
+}
+
+/* 深海：墨绿松石底。注意这不是深蓝，色相在青绿一侧。 */
+body.theme-ocean {
+  color-scheme: dark;
+  --bg: #07181a;
+  --bg-elev: #0a1f21;
+  --surface: #0d2528;
+  --surface-2: #123033;
+  --surface-3: #173b3f;
+  --line: #173b3f;
+  --line-strong: #1f4d52;
+  --text: #e2f2f1;
+  --text-dim: #a3c6c4;
+  --text-mute: #7aa09e;
+  --accent: #37c2b6;
+  --accent-2: #2a9fb0;
+  --accent-ink: #04191a;
+}
+
+body.theme-forest {
+  color-scheme: dark;
+  --bg: #0f1510;
+  --bg-elev: #121b14;
+  --surface: #162019;
+  --surface-2: #1c2920;
+  --surface-3: #243428;
+  --line: #243428;
+  --line-strong: #2f4434;
+  --text: #e7efe4;
+  --text-dim: #aabfa6;
+  --text-mute: #7f947c;
+  --accent: #86c46a;
+  --accent-2: #5fa35a;
+  --accent-ink: #0c1a0c;
+}
+
+body.theme-sunset {
+  color-scheme: dark;
+  --bg: #17100c;
+  --bg-elev: #1d140f;
+  --surface: #241813;
+  --surface-2: #2e201a;
+  --surface-3: #3a2921;
+  --line: #3a2921;
+  --line-strong: #4c372c;
+  --text: #f3e7de;
+  --text-dim: #c6aa99;
+  --text-mute: #9a8071;
+  --accent: #f0883e;
+  --accent-2: #e0614a;
+  --accent-ink: #1d0f07;
+}
+
+body.theme-violet {
+  color-scheme: dark;
+  --bg: #120f18;
+  --bg-elev: #17131f;
+  --surface: #1c1726;
+  --surface-2: #241d30;
+  --surface-3: #2f263d;
+  --line: #2f263d;
+  --line-strong: #3f3450;
+  --text: #ece7f4;
+  --text-dim: #b6abc9;
+  --text-mute: #8b81a3;
+  --accent: #b291f0;
+  --accent-2: #8f6fe0;
+  --accent-ink: #150f22;
+}
+
+body.theme-rose {
+  color-scheme: dark;
+  --bg: #160d10;
+  --bg-elev: #1c1115;
+  --surface: #221419;
+  --surface-2: #2c1a20;
+  --surface-3: #392229;
+  --line: #392229;
+  --line-strong: #4a2c35;
+  --text: #f5e8ea;
+  --text-dim: #c9a9b0;
+  --text-mute: #9d7882;
+  --accent: #e88ba4;
+  --accent-2: #d1596f;
+  --accent-ink: #1f0f14;
+}
+
+body.theme-amber {
+  color-scheme: dark;
+  --bg: #17130c;
+  --bg-elev: #1c170e;
+  --surface: #211b12;
+  --surface-2: #2a2317;
+  --surface-3: #342b1c;
+  --line: #342b1c;
+  --line-strong: #463a26;
+  --text: #f2e9d8;
+  --text-dim: #c8b795;
+  --text-mute: #99896a;
+  --accent: #f2c14e;
+  --accent-2: #d9a13a;
+  --accent-ink: #1c1404;
+}
+
+body.theme-slate {
+  color-scheme: dark;
+  --bg: #15171a;
+  --bg-elev: #191c20;
+  --surface: #1d2025;
+  --surface-2: #24282e;
+  --surface-3: #2d323a;
+  --line: #2d323a;
+  --line-strong: #3b414b;
+  --text: #e9ecef;
+  --text-dim: #a9b0b8;
+  --text-mute: #7f868f;
+  --accent: #9aa7b4;
+  --accent-2: #c3ccd6;
+  --accent-ink: #0f1214;
+}
 
 /* 设置页 --------------------------------------------------------------- */
 .settings-form { display: grid; gap: var(--space-5); }
@@ -835,26 +1027,59 @@ body.theme-slate  { --accent: #94a3b8; --accent-2: #cbd5e1; }
   gap: 4px;
   padding: 6px;
   border-radius: calc(var(--radius) - 4px);
-  background: var(--bg);
-  border: 1px solid var(--line);
+  background: var(--sw-bg, var(--bg));
+  border: 1px solid var(--sw-line, var(--line));
 }
 
 .swatch__bar { display: block; height: 8px; border-radius: 3px; }
 
-/* 三条色条分别代表：底色 / 卡片面 / 强调色。 */
-.swatch__bar:nth-child(1) { background: var(--surface); }
-.swatch__bar:nth-child(2) { background: var(--line); }
+/* 三条色条分别代表：底色 / 卡片面 / 强调色。
+   三者都取色卡自己的 --sw-* 与 --accent，否则在设置页上 10 张卡片会长得一样。 */
+.swatch__bar:nth-child(1) { background: var(--sw-bg, var(--surface)); }
+.swatch__bar:nth-child(2) { background: var(--sw-surface, var(--line)); }
 .swatch__bar:nth-child(3) { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
 
-/* 色卡自己的配色写在这里，与 body.theme-* 的强调色保持一致。 */
-.swatch--ink    { --accent: #6ea8fe; --accent-2: #8b7cf6; }
-.swatch--ocean  { --accent: #38bdf8; --accent-2: #22d3ee; }
-.swatch--forest { --accent: #4ade80; --accent-2: #34d399; }
-.swatch--sunset { --accent: #fb923c; --accent-2: #f472b6; }
-.swatch--violet { --accent: #a78bfa; --accent-2: #c084fc; }
-.swatch--rose   { --accent: #f472b6; --accent-2: #fb7185; }
-.swatch--amber  { --accent: #fbbf24; --accent-2: #f59e0b; }
-.swatch--slate  { --accent: #94a3b8; --accent-2: #cbd5e1; }
+/* 色卡配色与 body.theme-* 一一对应；改主题时必须一起改，否则预览与实际不符。 */
+.swatch--ink {
+  --sw-bg: #121110; --sw-surface: #23201d; --sw-line: #3a352f;
+  --accent: #e8b15c; --accent-2: #d08a4a;
+}
+.swatch--paper {
+  --sw-bg: #f6f2ea; --sw-surface: #efe9dd; --sw-line: #cfc4b0;
+  --accent: #a8452a; --accent-2: #8a5a2b;
+}
+.swatch--sand {
+  --sw-bg: #ece7dc; --sw-surface: #e4ddce; --sw-line: #c4b9a2;
+  --accent: #5f7a3a; --accent-2: #8a7a2e;
+}
+.swatch--ocean {
+  --sw-bg: #07181a; --sw-surface: #123033; --sw-line: #1f4d52;
+  --accent: #37c2b6; --accent-2: #2a9fb0;
+}
+.swatch--forest {
+  --sw-bg: #0f1510; --sw-surface: #1c2920; --sw-line: #2f4434;
+  --accent: #86c46a; --accent-2: #5fa35a;
+}
+.swatch--sunset {
+  --sw-bg: #17100c; --sw-surface: #2e201a; --sw-line: #4c372c;
+  --accent: #f0883e; --accent-2: #e0614a;
+}
+.swatch--violet {
+  --sw-bg: #120f18; --sw-surface: #241d30; --sw-line: #3f3450;
+  --accent: #b291f0; --accent-2: #8f6fe0;
+}
+.swatch--rose {
+  --sw-bg: #160d10; --sw-surface: #2c1a20; --sw-line: #4a2c35;
+  --accent: #e88ba4; --accent-2: #d1596f;
+}
+.swatch--amber {
+  --sw-bg: #17130c; --sw-surface: #2a2317; --sw-line: #463a26;
+  --accent: #f2c14e; --accent-2: #d9a13a;
+}
+.swatch--slate {
+  --sw-bg: #15171a; --sw-surface: #24282e; --sw-line: #3b414b;
+  --accent: #9aa7b4; --accent-2: #c3ccd6;
+}
 
 .theme-card__name {
   display: flex;
@@ -923,14 +1148,22 @@ body::before {
 
 /* 素底：什么都不铺，只有一点顶部渐隐，避免纯色大屏发闷 */
 body.bg-plain::before {
-  background: radial-gradient(900px 420px at 50% -10%, rgb(255 255 255 / 0.045), transparent 70%);
+  background: radial-gradient(
+    900px 420px at 50% -10%,
+    color-mix(in srgb, var(--text) 5%, transparent),
+    transparent 70%
+  );
 }
 
 /* 颗粒：极细的噪点，用 repeating-conic 造，无外部图片 */
 body.bg-grain::before {
   opacity: 0.5;
   background-image:
-    repeating-conic-gradient(from 0deg at 50% 50%, rgb(255 255 255 / 0.022) 0deg 1deg, transparent 1deg 2deg);
+    repeating-conic-gradient(
+      from 0deg at 50% 50%,
+      color-mix(in srgb, var(--text) 3%, transparent) 0deg 1deg,
+      transparent 1deg 2deg
+    );
   background-size: 3px 3px;
 }
 
@@ -951,14 +1184,18 @@ body.bg-aurora::before {
 
 /* 细纹：45° 斜线，密度低到几乎只剩质感 */
 body.bg-stripes::before {
-  background-image: repeating-linear-gradient(45deg, rgb(255 255 255 / 0.028) 0 1px, transparent 1px 9px);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--text) 4%, transparent) 0 1px,
+    transparent 1px 9px
+  );
 }
 
 /* 方格：纸面用的那种淡格线 */
 body.bg-grid::before {
   background-image:
-    linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px);
+    linear-gradient(color-mix(in srgb, var(--text) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--text) 4%, transparent) 1px, transparent 1px);
   background-size: 52px 52px;
 }
 
@@ -1014,9 +1251,17 @@ body.font-mono .card p { max-width: 68ch; }
   margin-bottom: var(--space-3);
 }
 
-.bg-preview--plain { background-image: radial-gradient(140px 60px at 50% 0%, rgb(255 255 255 / 0.06), transparent 70%); }
+.bg-preview--plain { background-image: radial-gradient(
+    140px 60px at 50% 0%,
+    color-mix(in srgb, var(--text) 7%, transparent),
+    transparent 70%
+  ); }
 .bg-preview--grain {
-  background-image: repeating-conic-gradient(from 0deg at 50% 50%, rgb(255 255 255 / 0.05) 0deg 1deg, transparent 1deg 2deg);
+  background-image: repeating-conic-gradient(
+    from 0deg at 50% 50%,
+    color-mix(in srgb, var(--text) 6%, transparent) 0deg 1deg,
+    transparent 1deg 2deg
+  );
   background-size: 3px 3px;
 }
 .bg-preview--mesh {
@@ -1030,12 +1275,16 @@ body.font-mono .card p { max-width: 68ch; }
     linear-gradient(288deg, transparent 32%, var(--accent2-glow) 54%, transparent 72%);
 }
 .bg-preview--stripes {
-  background-image: repeating-linear-gradient(45deg, rgb(255 255 255 / 0.05) 0 1px, transparent 1px 8px);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--text) 6%, transparent) 0 1px,
+    transparent 1px 8px
+  );
 }
 .bg-preview--grid {
   background-image:
-    linear-gradient(rgb(255 255 255 / 0.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 0.055) 1px, transparent 1px);
+    linear-gradient(color-mix(in srgb, var(--text) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--text) 6%, transparent) 1px, transparent 1px);
   background-size: 14px 14px;
 }
 

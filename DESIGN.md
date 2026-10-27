@@ -4659,3 +4659,103 @@ pub fn address_key(ip: &str) -> String
   只有注册与登录失败这两处按地址计键；真要彻底解决得换成带权重的滑动窗口 + 更长的保留，代价是复杂度。
 - 会话存储的 `MAX_SESSIONS` 淘汰会连带清掉活跃用户的会话（表现为"莫名要重新登录"）。
   这是压力下的取舍，不是缺陷；如果将来真的被灌满，应当从"只给匿名访客签发 CSRF 会话"入手，而不是调大上限。
+
+## 49. 配色重做：主题从「换强调色」变成「换整套调色板」
+
+### 49.1 用户的原话与它指的到底是什么
+
+> 前端还是太单调了，尤其是背景那个深蓝色，现在网上全是这种配色
+
+先看到的是一张设置页截图：十张色卡长得**几乎一模一样**，只有高亮色不同。查代码确认这不是错觉：
+
+```css
+/* 改之前：8 套主题共用一个深蓝底，只覆盖强调色 */
+body.theme-ink    { --accent: #6ea8fe; --accent-2: #8b7cf6; }
+body.theme-ocean  { --accent: #38bdf8; --accent-2: #22d3ee; }
+...
+```
+
+`:root` 里 `--bg: #0b0d12`、`--surface: #141821` 是所有主题共用的。于是"换主题"实际只换了一处高亮色，
+背景永远是同一块深蓝。用户说的"网上全是这种配色"，指的就是这块 `#0b0d12`。
+
+### 49.2 改法：一整套调色板
+
+每套主题现在自带 **底色 / 卡面三级 / 分隔线 / 文字三级 / 强调色两级**，共 12 个变量 + `color-scheme`：
+
+| key | 名称 | 底 | 强调 | 说明 |
+| --- | --- | --- | --- | --- |
+| `ink` | 乌木 | `#121110` 暖黑 | `#e8b15c` 琥珀 | 默认，不再是蓝 |
+| `paper` | 纸白 | `#f6f2ea` 暖纸 | `#a8452a` 赭红 | **浅色**，白天/投屏 |
+| `sand` | 沙褐 | `#ece7dc` 米灰 | `#5f7a3a` 橄榄 | **浅色**，比纸白更耐看 |
+| `ocean` | 深海 | `#07181a` 墨绿松石 | `#37c2b6` 青绿 | 不是深蓝，色相在青绿侧 |
+| `forest` | 苔林 | `#0f1510` 深绿 | `#86c46a` 苔绿 | 状态标签不刺眼 |
+| `sunset` | 暮褐 | `#17100c` 暖褐 | `#f0883e` 橙 | 夜里更柔和 |
+| `violet` | 檀紫 | `#120f18` 紫黑 | `#b291f0` 紫 | 冷但不发蓝 |
+| `rose` | 酒红 | `#160d10` 酒红 | `#e88ba4` 藕粉 | 最暖的一档 |
+| `amber` | 琥珀 | `#17130c` 近黑褐 | `#f2c14e` 金黄 | 截图最醒目 |
+| `slate` | 石墨 | `#15171a` 中性灰 | `#9aa7b4` 银灰 | 几乎无色相 |
+
+`DEFAULT_THEME` 仍是 `"ink"`，老用户库里存的 key 全部继续有效（只是长得不一样了），
+未知 key 照旧回落到默认——加主题不需要迁移。
+
+### 49.3 顺带必须改的东西（否则浅色主题是残的）
+
+只加两套浅色主题、不动组件会得到一堆"浅字压浅底"。凡是写死颜色、且只在深色底上成立的规则，
+这一轮全部改成 token 或 `color-mix`：
+
+| 位置 | 原来 | 现在 |
+| --- | --- | --- |
+| `a:hover` | `#a9c8ff` 固定浅蓝 | `color-mix(--accent 62%, --text)` |
+| 徽章 `.badge--public/internal/group/pending/doing` | 5 组固定浅色 + 固定 `rgb()` 边框 | 由 `--ok/--accent/--accent-2/--warn` 与 `--text` 混出 |
+| `.btn--danger` | `#ffb3b3` | `--danger` 与 `--text` 混出 |
+| 输入框 | `background: #0d1017` | `var(--bg-elev)` |
+| flash 三种 | `#bdf3cf / #ffc2c2 / #c8dbff` | 状态色与 `--text` 混出 |
+| 来宾徽章 / 提示条 / 通知图标与下划线 | 固定紫与固定蓝 | `--accent-2` / `--accent` 混出 |
+| 背板 `::before` 的 6 种纹理 | `rgb(255 255 255 / …)` 白光 | `color-mix(--text …)`，深底是微光、浅底是微灰 |
+| 表格行 hover、设置页预览 | 白光 | 同上 |
+| `--shadow-glow` | 写死蓝色 RGB | `color-mix(--accent …)`，光晕跟着主题走 |
+
+改完文件里 `rgb(255 255 255` 的残留是 **0**，`:root` 之外不再有硬编码十六进制色（`@media print` 的
+`#fff/#000` 保留——打印就该是黑白）。
+
+色卡预览也一起修了：三条色条原来读 `var(--surface)`（继承自**当前**主题），
+所以十张卡片看起来一样；现在读色卡自己的 `--sw-bg/--sw-surface/--sw-line`，
+`--accent` 也各写各的，设置页上十张卡片才真的不一样。
+
+### 49.4 目录与测试
+
+- `src/shared/appearance.rs` 的 `THEMES` 从 8 条扩到 10 条（新增 `paper`、`sand`），
+  中文名与提示语按新配色重写（原来的"墨蓝/海青"已经名不副实）。
+- `tests/settings_flow.rs` 把"正好 8 个主题"改成**按目录核对**（`THEMES.len()` 与逐个 key 都要在页面上），
+  理由写在注释里：写死数字会变成"加一套配色就得改一次测试"，而这条用例真正要守的是"目录里每一套都渲染出来，不多不少"。
+
+### 49.5 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test` | 312 passed / 0 failed（lib 212 + 14 集成目标） |
+| `clippy --all-targets -- -D warnings` / `fmt --check` | 0 / 0 |
+| 二进制 | musl 静态 8.46 MB，sha256 `a45feaec77dba4898e6847152f3ed69aab72eaf3db15ca31b9b940d857f0d939`，`PT_INTERP=none` |
+| 部署 | 三份静态哈希本地=远端；`restart: active`；`healthz local: 200`；`cache key: app.css?v=20261101` |
+| 线上 CSS | 含 `body.theme-paper` / `body.theme-sand` / `.swatch--paper`，`rgb(255 255 255` 计数 **0** |
+| 线上页面 | `<body class="theme-ink bg-plain font-sans">` |
+| `ops/smoke.ps1` | **20/20** |
+
+### 49.6 这轮踩的坑
+
+- **musl 链接再次 `ENAMETOOLONG`**：对象文件 200+ 后，直接 `cargo build --release --target …` 会失败，
+  报 `zig wrapper: argv 36412 chars, using response file` 之后紧跟 `unable to spawn C:\zig\zig.exe: NameTooLong`
+  ——response 文件救了**传给 zig 的命令行**，但 zig 自己再 fork 一次时又拼回长命令行。
+  唯一有效的办法是**把 target 目录放到短路径**：`deploy/build-musl.ps1 -TargetDir C:\n`
+  （脚本建完再把产物复制回 `target\<triple>\release\nexus`，其它脚本不用改）。
+- **`build-musl.ps1` 在成功时也返回退出码 1**：PowerShell 把 cargo 写到 stderr 的 `Compiling …` 当成
+  NativeCommandError。看 `artifact:` / `sha256:` 两行，不要只看 `$LASTEXITCODE`。
+- **一次性脚本会消失**：`.tools/bumpver.js` 上一轮还在、这一轮 `MODULE_NOT_FOUND`。
+  改版本号这种两步操作直接用编辑工具改 `Cargo.toml:3` 与 `Cargo.lock:1272`，不要再依赖脚本存在。
+
+### 49.7 已知取舍
+
+- 十套配色都是手写的，没有自动生成器；加一套要同时改 `appearance.rs`、`:root` 之外的 `body.theme-*`、
+  以及 `.swatch--*` 三处——**三处必须一致**，否则设置页的预览会与真实效果不符。
+- 浅色主题下 `.editor__surface` 等富文本区域的对比度是按 `--surface` 算的，没有单独再调一档。
+- 没有做"跟随系统深浅色"：那需要 `prefers-color-scheme` 与用户显式选择合并，属于额外一层状态。

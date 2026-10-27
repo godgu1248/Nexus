@@ -30,49 +30,65 @@ pub const DEFAULT_BACKDROP: &str = "plain";
 /// 默认字体。与 `migrations/0009_user_appearance.sql` 的 DEFAULT 必须一致。
 pub const DEFAULT_FONT: &str = "sans";
 
-/// 全部强调色。顺序即设置页的展示顺序。
+/// 全部配色。顺序即设置页的展示顺序。
+///
+/// 每一条都是**整套调色板**（底/卡面/分隔线/文字/强调色），不是只换强调色：
+/// 只换强调色时 10 张卡片在设置页上几乎一模一样，切过去也像没切。
+/// `paper` / `sand` 是浅色底，其余为深色底但色相各不相同（青绿、绿、褐、紫、酒红、金、灰）。
 pub const THEMES: &[Choice] = &[
     Choice {
         key: "ink",
-        label: "墨蓝",
+        label: "乌木",
         en: "Ink",
-        hint: "默认。深色底 + 冷蓝强调色，长时间看不累。",
+        hint: "默认。暖黑底 + 琥珀，长时间看不发蓝。",
+    },
+    Choice {
+        key: "paper",
+        label: "纸白",
+        en: "Paper",
+        hint: "浅色纸感 + 赭红，白天与投屏最清楚。",
+    },
+    Choice {
+        key: "sand",
+        label: "沙褐",
+        en: "Sand",
+        hint: "米灰底 + 橄榄，比纸白更耐看。",
     },
     Choice {
         key: "ocean",
-        label: "海青",
+        label: "深海",
         en: "Ocean",
-        hint: "偏青的冷静配色，适合白天开着灯用。",
+        hint: "墨绿松石底 + 青绿，不是常见的那种深蓝。",
     },
     Choice {
         key: "forest",
-        label: "苔绿",
+        label: "苔林",
         en: "Forest",
-        hint: "低饱和绿，状态标签不刺眼。",
+        hint: "深绿底 + 苔绿，状态标签不刺眼。",
     },
     Choice {
         key: "sunset",
-        label: "暮橙",
+        label: "暮褐",
         en: "Sunset",
-        hint: "暖橙强调色，晚上看更柔和。",
+        hint: "暖褐底 + 橙红，晚上看更柔和。",
     },
     Choice {
         key: "violet",
-        label: "雾紫",
+        label: "檀紫",
         en: "Violet",
-        hint: "紫调偏冷，和蓝色区分开又不像换了个站。",
+        hint: "紫黑底 + 紫调，冷但不发蓝。",
     },
     Choice {
         key: "rose",
-        label: "蔷薇",
+        label: "酒红",
         en: "Rose",
-        hint: "粉红强调色，只换强调色不换底色，克制。",
+        hint: "酒红底 + 藕粉，色相最暖的一档。",
     },
     Choice {
         key: "amber",
         label: "琥珀",
         en: "Amber",
-        hint: "金黄强调色，截图放文档里最醒目。",
+        hint: "近黑褐底 + 金黄，截图放文档里最醒目。",
     },
     Choice {
         key: "slate",

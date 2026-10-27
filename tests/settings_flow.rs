@@ -208,9 +208,10 @@ async fn every_theme_is_listed_and_the_current_one_is_marked() {
     assert_eq!(response.status(), StatusCode::OK, "登录后应能打开设置页");
     let html = body_of(response).await;
 
-    for key in [
-        "ink", "ocean", "forest", "sunset", "violet", "rose", "amber", "slate",
-    ] {
+    // 主题清单以目录为准：写死数字会变成"加一套配色就得改一次测试"，
+    // 而这条用例真正要守的是"目录里的每一套都渲染出来，不多也不少"。
+    for choice in nexus::shared::appearance::THEMES {
+        let key = choice.key;
         assert!(
             html.contains(&format!("name=\"theme\" value=\"{key}\"")),
             "色卡缺少主题 {key}"
@@ -218,8 +219,8 @@ async fn every_theme_is_listed_and_the_current_one_is_marked() {
     }
     assert_eq!(
         html.matches("name=\"theme\" value=\"").count(),
-        8,
-        "应正好 8 个主题"
+        nexus::shared::appearance::THEMES.len(),
+        "色卡数量应与目录一致"
     );
     // 默认 ink，必须标成当前项且已勾选。
     assert!(html.contains("theme-ink"), "body 应带当前主题 class");
