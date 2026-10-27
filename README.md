@@ -85,6 +85,9 @@ cp .env.example .env && $EDITOR .env      # 至少填 DATABASE_URL
 ./nexus                              # 默认监听 127.0.0.1:8080
 ```
 
+同一份东西也有 `.tar.gz`（`tar -xzf nexus-<VERSION>-linux-x86_64.tar.gz`）：tar 保留可执行位，
+省掉 `chmod` 那一步。两个格式内容一致，挑顺手的用。
+
 `static/` 需要由反向代理直出（Rust 不挂 `/static`），本地试跑可以 `python3 -m http.server 8090 --directory static` 并把 `STATIC_BASE_URL` 指过去。
 
 ## 本地运行

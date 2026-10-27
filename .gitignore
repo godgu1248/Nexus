@@ -7,6 +7,9 @@
 .env.*
 !.env.example
 
+# 打包产物（package.ps1 的输出）
+/dist/
+
 # 运行时产物
 *.log
 /logs/

@@ -4826,3 +4826,46 @@ body.theme-ocean  { --accent: #38bdf8; --accent-2: #22d3ee; }
 教训：**任何含非 ASCII 的改写都不要走 PowerShell 内联字符串**——要么 `.js` 文件，要么
 `[System.IO.File]::WriteAllText` 配 `write` 工具产出的 UTF-8 源。改完必须回读一次做 `JSON.stringify`
 对照，不能只信"命令没报错"。
+
+### 49.10 local-build 补齐 `.tar.gz`（`package.ps1` 的一处静默遗漏）
+
+顶层（CI）发布的是四个形态：linux `.tar.gz`、linux `.zip`、source `.zip`、windows `.zip`；
+而本机 `package.ps1` 只打三个 zip。于是"按发布页的说法去下 tar.gz"的人在 `local-build/`
+里什么都找不到——不是 404 提示不清楚，而是那个文件在另一套产物里根本不存在。
+
+两处改动：
+
+1. 打完 linux zip 之后，用同一个 stage 目录再 `tar.exe -czf` 一份 `.tar.gz`。
+   tar 会保留可执行位，所以下载 tar.gz 的人不需要 `chmod +x`（zip 从 Windows 打包不带权限位）。
+2. `SHA256SUMS.txt` 的收集循环原来是 `Get-ChildItem $dist -Filter *.zip`——**新增的 `.tar.gz` 不会被算进去**，
+   而且不会报错：校验文件看起来完整，只是少一行。改成按扩展名正则筛 `\.(zip|tar\.gz)$`。
+   这和之前"三列校验和让 `sha256sum -c` 失败"是同一类问题：**生成校验和的地方比产生文件的地方窄一格，
+   差异就会静默存在**。
+
+顺带发现：重打之后 zip 的字节与上一轮不同（source 675,900 → 676,808）。这不奇怪——
+`package.ps1` 的 source 包走 `git archive HEAD`，而 HEAD 在这两轮之间多了三个提交（README/DESIGN/发行说明），
+包内容自然变大。**结论：`local-build/` 的字节只保证"与它自己那一次的 SHA256SUMS 一致"，
+不能跨轮次比对，也不能拿去和 CI 产物比。**
+
+验证（公网重新下载重算）：
+
+```
+OK /downloads/local-build/nexus-0.1.18-linux-x86_64.tar.gz (4247642)
+OK /downloads/local-build/nexus-0.1.18-linux-x86_64.zip    (4267618)
+OK /downloads/local-build/nexus-0.1.18-source.zip          (676808)
+OK /downloads/local-build/nexus-0.1.18-windows-x86_64.zip  (4305673)
+RESULT top=4 local=4 failures=0
+```
+
+打了两遍包，字节两次都不一样——第二次是因为 `package.ps1` 自己搬进了 `deploy/`，
+而 `deploy/` 在 `$common` 列表里，会被复制进每个归档。这恰好是「不要跨轮次比字节」最直观的证据：
+只要仓库内容变了，`local-build/` 的字节就该变，比对只能对着它自己那一份 `SHA256SUMS.txt`。
+
+另外把打包脚本本身也纳入版本库了：`deploy/package.ps1` 是 `C:/Nexus枢纽/package.ps1` 的重定向副本
+（`$repo` 取父目录，`dist` 落在 `<repo>/dist` 并由 `.gitignore` 忽略）。工作区根那份在 git 之外，
+已经丢过一次；配方必须留在仓库里，否则下一个人只能靠猜。脚本靠 `$PSScriptRoot` 自定位，
+所以从任何目录 `powershell -File nexus/deploy/package.ps1` 都能跑——这一点是实跑验证过的。
+
+
+服务端安装脚本 `ops/install-local-0118.sh` 只替换 `local-build/` 目录，不碰顶层——
+顶层哈希必须与发布页 `SHA256SUMS.txt` 逐字节对应，那是"对着 Release 校验"唯一能成立的依据。
