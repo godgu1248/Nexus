@@ -54,6 +54,25 @@ pub async fn find_by_sha(pool: &MySqlPool, sha256: &str) -> Result<Option<Media>
 }
 
 /// 落一行记录。返回 `(id, 是否新建)`：`false` 表示 sha 已经存在（并发下由唯一索引裁决）。
+/// 刷新一份已存在的 Word 文档的转换结果（正文与标题）。
+///
+/// 只在"重新解析出来的东西和库里不一样"时调用——转换规则会演进（比如图片从"跳过"
+/// 改成"导入并压缩"），而用户重传同一份文件时看到旧结果会以为是坏掉了。
+pub async fn refresh_docx(
+    tx: &mut Transaction<'_, MySql>,
+    sha256: &str,
+    title: &str,
+    html: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE media SET title = ?, html = ? WHERE sha256 = ? AND kind = 'docx'")
+        .bind(title)
+        .bind(html)
+        .bind(sha256)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 pub async fn insert_media(
     tx: &mut Transaction<'_, MySql>,
     input: NewMedia<'_>,

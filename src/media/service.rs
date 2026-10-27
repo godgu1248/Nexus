@@ -238,23 +238,13 @@ pub async fn save_docx(
     let sha = sha256_hex(data);
     let viewer_url = format!("/doc/{sha}");
 
-    // 内容已经存在：直接复用库里那行（不重新解析，避免同一份文件两次解析出不同结果）。
-    if let Some(existing) = model::find_by_sha(pool, &sha).await?
-        && existing.kind == "docx"
-    {
-        return Ok(StoredDoc {
-            viewer_url,
-            sha256: sha,
-            title: existing
-                .title
-                .clone()
-                .unwrap_or_else(|| default_title(file_name)),
-            html: existing.html.clone().unwrap_or_default(),
-            bytes: existing.bytes,
-            reused: true,
-            notes: Vec::new(),
-        });
-    }
+    // 内容已经存在时**也要重新解析**。
+    //
+    // 早先这里直接返回库里那行 html，理由是"同一份文件不该解析出两种结果"。但转换规则
+    // 会演进：0.1.13 之前图片是跳过的（正文里只剩一个「〔图片〕」占位），之后才导入。
+    // 复用旧 html 意味着**同一份文件重新上传永远修不好**——用户看到的是"上传成功了，
+    // 图片还是没有"。现在改成：解析照做，结果与库里一致就早返回，不一致就用新的覆盖。
+    // 代价是一次重复解析（几 MB 的文档，几十毫秒），换来"重传一次就自动修好"。
 
     // 解析放在阻塞线程池：一份 8 MB 的 docx 解出来是几十 MB 的 XML，解析是纯 CPU 活，
     // 直接在 async worker 上跑会把这台 2 vCPU 机器的其它请求一起卡住。
@@ -279,6 +269,25 @@ pub async fn save_docx(
         }
     };
 
+    // 库里已有这份文档：只有正文与标题都一致才算"复用"，否则继续走下面的流程去刷新它。
+    let existing = model::find_by_sha(pool, &sha).await?;
+    if let Some(row) = existing.as_ref()
+        && row.kind == "docx"
+        && row.html.as_deref() == Some(parsed.html.as_str())
+        && row.title.as_deref() == Some(title.as_str())
+    {
+        return Ok(StoredDoc {
+            viewer_url,
+            sha256: sha,
+            title,
+            html: parsed.html.clone(),
+            bytes: row.bytes,
+            reused: true,
+            notes: Vec::new(),
+        });
+    }
+    let refreshing = existing.is_some();
+
     let dir = PathBuf::from(&config.upload_dir);
     let file_name_on_disk = format!("{sha}.docx");
     if !dir.join(&file_name_on_disk).exists() {
@@ -289,8 +298,26 @@ pub async fn save_docx(
 
     // 图片与文档在同一个事务里入库：任何一步失败都不会留下"正文引用了不存在的图"。
     // 落盘是内容寻址的（同一个 sha 只有一个文件），重复上传同一份文档不会多出文件。
+    //
+    // 压缩在事务之前、阻塞线程池里做完：解码 / 缩放 / 重编码是纯 CPU 活，
+    // 一次文档可能带七八张图，放在 async worker 上会把整台机器拖住。
+    let mut parsed = parsed;
+    let raw_images = std::mem::take(&mut parsed.images);
+    let raw_total: usize = raw_images.iter().map(|image| image.bytes.len()).sum();
+    let optimized = tokio::task::spawn_blocking(move || {
+        raw_images
+            .into_iter()
+            .map(|image| {
+                crate::shared::imageopt::optimize_docx_image(&image.bytes, image.ext, image.mime)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|err| AppError::internal(anyhow::anyhow!("图片压缩任务异常结束：{err}")))?;
+    let optimized_total: usize = optimized.iter().map(|image| image.bytes.len()).sum();
+
     let mut html = parsed.html.clone();
-    for (index, image) in parsed.images.iter().enumerate() {
+    for (index, image) in optimized.iter().enumerate() {
         let image_sha = sha256_hex(&image.bytes);
         let file_on_disk = format!("{image_sha}.{}", image.ext);
         if !dir.join(&file_on_disk).exists() {
@@ -344,12 +371,32 @@ pub async fn save_docx(
                 "bytes": data.len(),
                 "kind": "docx",
                 "title_len": title.chars().count(),
+                "images": optimized.len(),
             })),
         )
         .await?;
+    } else if refreshing {
+        // 同一份文件重传，但这次解析出来的正文与库里不同（转换规则变了，或者第一次
+        // 上传时图片被跳过）。刷新那一行，让"重传一次"真的能修好旧文档。
+        model::refresh_docx(&mut tx, &sha, &title, &html).await?;
     }
 
     tx.commit().await?;
+
+    // 压缩结果给用户看一眼：他们只看到一个"上传成功"，不知道图被压了多少。
+    let mut notes = parsed
+        .notes
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<String>>();
+    if optimized_total > 0 && raw_total > optimized_total {
+        notes.push(format!(
+            "内嵌图片已压缩：{} 张，{} → {}",
+            optimized.len(),
+            human_size(raw_total),
+            human_size(optimized_total)
+        ));
+    }
 
     Ok(StoredDoc {
         viewer_url,
@@ -358,11 +405,7 @@ pub async fn save_docx(
         html,
         bytes: data.len() as u32,
         reused: !inserted,
-        notes: parsed
-            .notes
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<Vec<String>>(),
+        notes,
     })
 }
 

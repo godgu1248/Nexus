@@ -1,6 +1,6 @@
 [package]
 name = "nexus"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 rust-version = "1.99"
 publish = false
@@ -67,6 +67,15 @@ time = "=0.3.55"
 zip = { version = "=9.1.2", default-features = false, features = ["deflate"] }
 # 解析 OOXML：只要流式事件读，不要 serde（省掉编译时间）。
 quick-xml = "=0.42.0"
+# Word 内嵌图片的压缩：解码 → 缩到长边 1600 → 不透明转 JPEG(86)、带透明留 PNG。
+# 关掉默认特性（bmp/exr/tiff/rayon 等都不需要），只留我们认识的四种格式；
+# 全是纯 Rust，不引入 C 依赖，交叉编译不受影响。
+image = { version = "=0.25.10", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+] }
 
 [dev-dependencies]
 http-body-util = "=0.1.5"

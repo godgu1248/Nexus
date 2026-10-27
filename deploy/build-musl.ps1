@@ -1,6 +1,9 @@
 param(
   [string]$ZigDir = 'C:\zig',
-  [string]$TargetDir = 'C:\nxtarget',
+  # Keep this short. With image/sha2/zip in the tree the link line reached 33,430 characters
+  # and zig's self-spawn died with `unable to spawn ... NameTooLong`; C:\nxtarget put it at
+  # 31,939. There is ~800 characters of headroom left, so do not lengthen this path.
+  [string]$TargetDir = 'C:\n',
   [switch]$DebugBuild
 )
 

@@ -7,6 +7,7 @@ pub mod appearance;
 pub mod audit;
 pub mod docx;
 pub mod http;
+pub mod imageopt;
 pub mod pagination;
 pub mod ratelimit;
 pub mod richtext;
